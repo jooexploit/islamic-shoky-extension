@@ -6,14 +6,14 @@ Thank you for your interest in contributing to Islamic Shoky! We welcome contrib
 
 ### 🐛 Reporting Bugs
 
-- Use the [GitHub Issues](https://github.com/islamic-shoky/islamic-shoky-extension/issues) page
+- Use the [GitHub Issues](https://github.com/jooexploit/islamic-shoky-extension/issues) page
 - Provide detailed steps to reproduce the issue
 - Include your VS Code version and operating system
 - Add screenshots if applicable
 
 ### 💡 Suggesting Features
 
-- Open a [GitHub Discussion](https://github.com/islamic-shoky/islamic-shoky-extension/discussions) for new ideas
+- Open a [GitHub Discussion](https://github.com/jooexploit/islamic-shoky-extension/discussions) for new ideas
 - Check if the feature already exists or has been discussed
 - Provide context about why this feature would be valuable
 
@@ -37,7 +37,7 @@ Thank you for your interest in contributing to Islamic Shoky! We welcome contrib
 
 ```bash
 # Clone the repository
-git clone https://github.com/islamic-shoky/islamic-shoky-extension.git
+git clone https://github.com/jooexploit/islamic-shoky-extension.git
 cd islamic-shoky-extension
 
 # Install dependencies
@@ -139,9 +139,9 @@ Contributors will be acknowledged in the README.md file and in release notes.
 
 ## 📞 Getting Help
 
-- **Discussions**: Use [GitHub Discussions](https://github.com/islamic-shoky/islamic-shoky-extension/discussions) for questions
-- **Issues**: Report bugs via [GitHub Issues](https://github.com/islamic-shoky/islamic-shoky-extension/issues)
-- **Email**: contact@islamic-shoky.com
+- **Discussions**: Use [GitHub Discussions](https://github.com/jooexploit/islamic-shoky-extension/discussions) for questions
+- **Issues**: Report bugs via [GitHub Issues](https://github.com/jooexploit/islamic-shoky-extension/issues)
+- **Email**: youseftamereg@gmail.com
 
 ## 🎯 Code of Conduct
 

@@ -118,9 +118,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Development
 
-- **Repository**: [GitHub](https://github.com/islamic-shoky/islamic-shoky-extension)
-- **Issues**: [Bug Reports](https://github.com/islamic-shoky/islamic-shoky-extension/issues)
-- **Discussions**: [Feature Requests](https://github.com/islamic-shoky/islamic-shoky-extension/discussions)
+- **Repository**: [GitHub](https://github.com/jooexploit/islamic-shoky-extension)
+- **Issues**: [Bug Reports](https://github.com/jooexploit/islamic-shoky-extension/issues)
+- **Discussions**: [Feature Requests](https://github.com/jooexploit/islamic-shoky-extension/discussions)
 
 ---
 
