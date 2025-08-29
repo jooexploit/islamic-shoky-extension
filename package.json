@@ -1,0 +1,204 @@
+{
+  "name": "islamic-shoky",
+  "displayName": "Islamic Shoky - Islamic Productivity Extension",
+  "description": "A comprehensive Islamic productivity extension for VS Code featuring prayer times, daily azkar, pomodoro timer, todo list, and Islamic reminders to help Muslim developers maintain their faith while coding.",
+  "version": "1.0.0",
+  "publisher": "jooexploit",
+  "author": {
+    "name": "jooexploit"
+  },
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.74.0"
+  },
+  "categories": [
+    "Other",
+    "Education"
+  ],
+  "keywords": [
+    "islamic",
+    "prayer",
+    "azan",
+    "azkar",
+    "muslim",
+    "productivity",
+    "pomodoro",
+    "todo",
+    "reminder",
+    "faith",
+    "religious",
+    "quran",
+    "allah",
+    "muhammad"
+  ],
+  "icon": "media/logo.png",
+  "galleryBanner": {
+    "color": "#2D5F6F",
+    "theme": "dark"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jooexploit/islamic-shoky-extension"
+  },
+  "homepage": "https://github.com/jooexploit/islamic-shoky-extension#readme",
+  "bugs": {
+    "url": "https://github.com/jooexploit/islamic-shoky-extension/issues"
+  },
+  "activationEvents": [
+    "onView:islamic-shoky.panel"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "islamic-shoky.helloWorld",
+        "title": "Hello World"
+      }
+    ],
+    "configuration": {
+      "title": "Islamic Shoky",
+      "properties": {
+        "islamic-shoky.enablePrayerTimes": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable prayer times display and notifications"
+        },
+        "islamic-shoky.enableAzkar": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable daily Azkar display with automatic rotation"
+        },
+        "islamic-shoky.enablePomodoro": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable Pomodoro timer for focused work sessions"
+        },
+        "islamic-shoky.enableTodoList": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable programming task management (todo list)"
+        },
+        "islamic-shoky.focusDuration": {
+          "type": "number",
+          "default": 25,
+          "minimum": 1,
+          "maximum": 60,
+          "description": "Focus session duration in minutes"
+        },
+        "islamic-shoky.breakDuration": {
+          "type": "number",
+          "default": 5,
+          "minimum": 1,
+          "maximum": 30,
+          "description": "Break duration in minutes"
+        },
+        "islamic-shoky.prayerCalculationMethod": {
+          "type": "string",
+          "default": "2",
+          "enum": [
+            "1",
+            "2",
+            "3",
+            "4",
+            "5"
+          ],
+          "enumDescriptions": [
+            "University of Islamic Sciences, Karachi",
+            "Islamic Society of North America (ISNA)",
+            "Muslim World League",
+            "Umm Al-Qura University, Makkah",
+            "Egyptian General Authority of Survey"
+          ],
+          "description": "Prayer times calculation method"
+        },
+        "islamic-shoky.enableNotifications": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable notifications for prayer times and timer completion"
+        },
+        "islamic-shoky.customAzkar": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "description": "Custom azkar list (Arabic text only). Example: [\"سبحان الله وبحمده\", \"لا إله إلا الله\"]. These will be added to the default collection."
+        },
+        "islamic-shoky.azkarChangeDelay": {
+          "type": "number",
+          "default": 30,
+          "minimum": 0,
+          "maximum": 300,
+          "description": "Delay in minutes between automatic azkar changes (0 to disable)"
+        },
+        "islamic-shoky.enableAzkarNotifications": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show notifications when azkar changes automatically"
+        },
+        "islamic-shoky.enableAzkarSound": {
+          "type": "boolean",
+          "default": true,
+          "description": "Play sound notification for special azkar (صلي علي محمد)"
+        },
+        "islamic-shoky.azkarSoundDelay": {
+          "type": "number",
+          "default": 2,
+          "minimum": 0,
+          "maximum": 10,
+          "description": "Delay in seconds before playing azkar sound notification (0 for immediate)"
+        },
+        "islamic-shoky.enablePrayerNotifications": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable notifications for prayer times and Islamic reminders"
+        },
+        "islamic-shoky.prayerReminderDelay": {
+          "type": "number",
+          "default": 5,
+          "minimum": 1,
+          "maximum": 30,
+          "description": "Minutes after prayer time to send Islamic reminder notification"
+        }
+      }
+    },
+    "views": {
+      "islamic-shoky-sidebar": [
+        {
+          "id": "islamic-shoky.panel",
+          "name": "Islamic Shoky Panel",
+          "type": "webview",
+          "icon": "media/logo.png",
+          "contextualTitle": "Islamic Shoky"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "islamic-shoky-sidebar",
+          "title": "Islamic Shoky",
+          "icon": "media/logo.png"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "pretest": "npm run lint",
+    "test": "vscode-test",
+    "package": "vsce package",
+    "publish": "vsce publish"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.74.0",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "18.x",
+    "eslint": "^8.57.0",
+    "@vscode/test-cli": "^0.0.11",
+    "@vscode/test-electron": "^2.5.2",
+    "@vscode/vsce": "^2.22.0"
+  },
+  "preview": false,
+  "qna": "marketplace"
+}

@@ -1,0 +1,15 @@
+{
+  "recommendations": [
+    "ms-vscode.vscode-typescript-next",
+    "esbenp.prettier-vscode",
+    "dbaeumer.vscode-eslint",
+    "ms-vscode.vscode-json",
+    "redhat.vscode-yaml",
+    "ms-vscode.extension-test-runner",
+    "ms-vscode.vscode-extension-manager",
+    "ms-vscode.vscode-js-debug",
+    "christian-kohler.path-intellisense",
+    "bradlc.vscode-tailwindcss"
+  ],
+  "unwantedRecommendations": ["ms-vscode.vscode-typescript", "hookyqr.beautify"]
+}

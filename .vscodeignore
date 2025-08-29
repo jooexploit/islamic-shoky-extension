@@ -1,0 +1,72 @@
+# .vscodeignore
+# This file specifies files and folders to exclude when packaging the extension
+
+# Development files
+.vscode/**
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+
+# Node modules
+node_modules/**
+
+# Source control
+.git/**
+.gitignore
+
+# Testing
+test/**
+*.test.js
+*.test.ts
+
+# Build artifacts
+out/**
+dist/**
+build/**
+
+# Documentation (keep README, CHANGELOG, LICENSE)
+CONTRIBUTING.md
+.github/**
+
+# Development tools
+.eslintrc*
+.prettierrc*
+.prettierignore
+tsconfig.json
+jsconfig.json
+**/eslint.config.mjs
+
+# OS generated files
+.DS_Store
+Thumbs.db
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+
+# Package manager files
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# IDE files
+.idea/**
+*.swp
+*.swo
+*~
+
+# Coverage reports
+coverage/**
+.nyc_output/**
+
+# Logs
+logs/**
+*.log
+
+# VS Code test files
+.vscode-test.*
+**/*.map
+.yarnrc
+vsc-extension-quickstart.md
