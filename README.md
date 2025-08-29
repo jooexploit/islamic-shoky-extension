@@ -149,9 +149,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 📞 Support
 
-- **Issues**: [GitHub Issues](https://github.com/islamic-shoky/islamic-shoky-extension/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/islamic-shoky/islamic-shoky-extension/discussions)
-- **Email**: support@islamic-shoky.com
+- **Issues**: [GitHub Issues](https://github.com/jooexploit/islamic-shoky-extension/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/jooexploit/islamic-shoky-extension/discussions)
+- **Email**: youseftamereg@gmail.com
 
 ## 🔄 Release Notes
 
