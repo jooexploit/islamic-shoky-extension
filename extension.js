@@ -54,6 +54,24 @@ class SidebarProvider {
           case "prayerTimesFetched":
             this._schedulePrayerNotifications(message.prayerTimes);
             break;
+          case "getLocationData":
+            this._handleLocationDataRequest(webviewView);
+            break;
+          case "locationDataResponse":
+            this._forwardLocationToPrayerProvider(message.location);
+            break;
+          case "locationUpdated":
+            this._forwardLocationToPrayerProvider(message.location);
+            break;
+          case "getTasksData":
+            this._handleTasksDataRequest(webviewView);
+            break;
+          case "tasksDataResponse":
+            this._forwardTasksToTasksProvider(message.tasks);
+            break;
+          case "tasksUpdated":
+            this._forwardTasksToTasksProvider(message.tasks);
+            break;
         }
       },
       undefined,
@@ -113,6 +131,43 @@ class SidebarProvider {
         command: "setManualLocation",
         city: city,
       });
+    }
+  }
+
+  _handleLocationDataRequest(webviewView) {
+    // Request location data from the webview and forward it to prayer provider
+    webviewView.webview.postMessage({
+      command: "requestCurrentLocation",
+    });
+  }
+
+  _forwardLocationToPrayerProvider(location) {
+    // Forward location data to the prayer provider
+    if (prayerProvider && location) {
+      prayerProvider.currentLocation = location;
+      prayerProvider.refresh();
+    }
+  }
+
+  _handleTasksDataRequest(webviewView) {
+    // Request tasks data from the webview and forward it to tasks provider
+    webviewView.webview.postMessage({
+      command: "requestCurrentTasks",
+    });
+  }
+
+  _forwardTasksToTasksProvider(tasks) {
+    // Forward tasks data to the tasks provider
+    console.log(
+      "SidebarProvider: Forwarding tasks to TasksDataProvider:",
+      tasks
+    );
+    if (tasksProvider && tasks) {
+      tasksProvider.updateTasks(tasks);
+    } else {
+      console.log(
+        "SidebarProvider: tasksProvider not available or no tasks data"
+      );
     }
   }
 
@@ -1080,6 +1135,75 @@ class SidebarProvider {
 								azkarChangeInterval = null;
 							}
 							break;
+						case 'requestCurrentLocation':
+							// Send current location data to extension
+							vscode.postMessage({
+								command: 'locationDataResponse',
+								location: userLocation
+							});
+							break;
+						case 'requestCurrentTasks':
+							// Send current tasks data to extension
+							vscode.postMessage({
+								command: 'tasksDataResponse',
+								tasks: todos
+							});
+							break;
+						case 'addTaskToList':
+							// Add task to the list
+							console.log('Webview received addTaskToList:', message);
+							if (message.task) {
+								const newTask = {
+									id: Date.now(),
+									text: message.task.text,
+									completed: message.task.completed || false
+								};
+								console.log('Adding new task:', newTask);
+								todos.push(newTask);
+								saveTodos();
+								renderTodos();
+								updateStats();
+								// Notify tasks provider
+								vscode.postMessage({
+									command: 'tasksUpdated',
+									tasks: todos
+								});
+							}
+							break;
+						case 'toggleTaskInList':
+							// Toggle task completion
+							console.log('Webview received toggleTaskInList:', message.taskId);
+							const toggleIndex = todos.findIndex(t => t.id === message.taskId);
+							console.log('Toggle index found:', toggleIndex, 'for taskId:', message.taskId);
+							if (toggleIndex !== -1) {
+								todos[toggleIndex].completed = !todos[toggleIndex].completed;
+								saveTodos();
+								renderTodos();
+								updateStats();
+								// Notify tasks provider
+								vscode.postMessage({
+									command: 'tasksUpdated',
+									tasks: todos
+								});
+							}
+							break;
+						case 'deleteTaskFromList':
+							// Delete task
+							console.log('Webview received deleteTaskFromList:', message.taskId);
+							const deleteIndex = todos.findIndex(t => t.id === message.taskId);
+							console.log('Delete index found:', deleteIndex, 'for taskId:', message.taskId);
+							if (deleteIndex !== -1) {
+								todos.splice(deleteIndex, 1);
+								saveTodos();
+								renderTodos();
+								updateStats();
+								// Notify tasks provider
+								vscode.postMessage({
+									command: 'tasksUpdated',
+									tasks: todos
+								});
+							}
+							break;
 					}
 				});
 				
@@ -1239,6 +1363,11 @@ class SidebarProvider {
 				
 				function saveLocation() {
 					localStorage.setItem('islamicShokyLocation', JSON.stringify(userLocation));
+					// Notify extension that location has been updated
+					vscode.postMessage({
+						command: 'locationUpdated',
+						location: userLocation
+					});
 				}
 				
 				function updateLocationDisplay() {
@@ -1621,10 +1750,21 @@ class SidebarProvider {
 					}
 					renderTodos();
 					updateStats();
+					
+					// Notify extension about loaded tasks
+					vscode.postMessage({
+						command: 'tasksUpdated',
+						tasks: todos
+					});
 				}
 				
 				function saveTodos() {
 					localStorage.setItem('islamicShokyTodos', JSON.stringify(todos));
+					// Notify extension about task updates
+					vscode.postMessage({
+						command: 'tasksUpdated',
+						tasks: todos
+					});
 				}
 				
 				function addTodo() {
@@ -1926,6 +2066,585 @@ class SidebarProvider {
 // Your extension is activated the very first time the command is executed
 
 let currentProvider = null; // Global reference to provider for cleanup
+let timerProvider = null; // Global reference to timer provider for cleanup
+let prayerProvider = null; // Global reference to prayer provider for cleanup
+let tasksProvider = null; // Global reference to tasks provider for cleanup
+
+/**
+ * Timer Data Provider Class for Explorer Panel
+ */
+class TimerDataProvider {
+  constructor(context) {
+    this._context = context;
+    this._onDidChangeTreeData = new vscode.EventEmitter();
+    this.onDidChangeTreeData = this._onDidChangeTreeData.event;
+
+    // Timer state
+    this.isRunning = false;
+    this.isPaused = false;
+    this.remainingTime = 25 * 60; // 25 minutes in seconds
+    this.totalTime = 25 * 60;
+    this.timerType = "Focus"; // 'Focus' or 'Break'
+    this.interval = null;
+    this.pomodoroCount = 0;
+  }
+
+  refresh() {
+    this._onDidChangeTreeData.fire();
+  }
+
+  getTreeItem(element) {
+    return element;
+  }
+
+  getChildren(element) {
+    if (!element) {
+      // Root level items
+      const items = [];
+
+      // Timer status item
+      const statusItem = new vscode.TreeItem(
+        `${this.timerType} Session`,
+        vscode.TreeItemCollapsibleState.None
+      );
+      statusItem.description = this.getTimerStatus();
+      statusItem.iconPath = new vscode.ThemeIcon(
+        this.isRunning
+          ? "play-circle"
+          : this.isPaused
+          ? "debug-pause"
+          : "circle-large-outline"
+      );
+      items.push(statusItem);
+
+      // Time remaining item
+      const timeItem = new vscode.TreeItem(
+        this.formatTime(this.remainingTime),
+        vscode.TreeItemCollapsibleState.None
+      );
+      timeItem.description = `of ${this.formatTime(this.totalTime)}`;
+      timeItem.iconPath = new vscode.ThemeIcon("clock");
+      items.push(timeItem);
+
+      // Pomodoro count item
+      const countItem = new vscode.TreeItem(
+        `Pomodoros: ${this.pomodoroCount}`,
+        vscode.TreeItemCollapsibleState.None
+      );
+      countItem.description = "completed today";
+      countItem.iconPath = new vscode.ThemeIcon("check-all");
+      items.push(countItem);
+
+      return items;
+    }
+    return [];
+  }
+
+  getTimerStatus() {
+    if (this.isRunning) {
+      return "Running...";
+    } else if (this.isPaused) {
+      return "Paused";
+    } else if (this.remainingTime === 0) {
+      return "Completed!";
+    } else {
+      return "Ready to start";
+    }
+  }
+
+  formatTime(seconds) {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, "0")}:${secs
+      .toString()
+      .padStart(2, "0")}`;
+  }
+
+  startTimer() {
+    if (this.remainingTime === 0) {
+      // Reset timer if completed
+      this.resetTimer();
+    }
+
+    this.isRunning = true;
+    this.isPaused = false;
+
+    this.interval = setInterval(() => {
+      this.remainingTime--;
+      this.refresh();
+
+      if (this.remainingTime === 0) {
+        this.completeTimer();
+      }
+    }, 1000);
+
+    this.refresh();
+    vscode.window.showInformationMessage(`${this.timerType} timer started! 🍅`);
+  }
+
+  pauseTimer() {
+    if (this.isRunning) {
+      this.isRunning = false;
+      this.isPaused = true;
+
+      if (this.interval) {
+        clearInterval(this.interval);
+        this.interval = null;
+      }
+
+      this.refresh();
+      vscode.window.showInformationMessage("Timer paused ⏸️");
+    }
+  }
+
+  stopTimer() {
+    this.isRunning = false;
+    this.isPaused = false;
+
+    if (this.interval) {
+      clearInterval(this.interval);
+      this.interval = null;
+    }
+
+    this.resetTimer();
+    this.refresh();
+    vscode.window.showInformationMessage("Timer stopped 🛑");
+  }
+
+  resetTimer() {
+    const config = vscode.workspace.getConfiguration("islamic-shoky");
+
+    if (this.timerType === "Focus") {
+      this.totalTime = config.get("focusDuration", 25) * 60;
+    } else {
+      this.totalTime = config.get("breakDuration", 5) * 60;
+    }
+
+    this.remainingTime = this.totalTime;
+  }
+
+  completeTimer() {
+    this.isRunning = false;
+
+    if (this.interval) {
+      clearInterval(this.interval);
+      this.interval = null;
+    }
+
+    if (this.timerType === "Focus") {
+      this.pomodoroCount++;
+      this.timerType = "Break";
+      vscode.window
+        .showInformationMessage(
+          "Focus session completed! Time for a break 🎉",
+          "Start Break",
+          "Skip Break"
+        )
+        .then((selection) => {
+          if (selection === "Start Break") {
+            this.resetTimer();
+            this.startTimer();
+          } else {
+            this.timerType = "Focus";
+            this.resetTimer();
+          }
+        });
+    } else {
+      this.timerType = "Focus";
+      vscode.window
+        .showInformationMessage(
+          "Break completed! Ready for another focus session? 💪",
+          "Start Focus",
+          "Later"
+        )
+        .then((selection) => {
+          if (selection === "Start Focus") {
+            this.resetTimer();
+            this.startTimer();
+          } else {
+            this.resetTimer();
+          }
+        });
+    }
+
+    this.refresh();
+  }
+}
+
+/**
+ * Prayer Data Provider Class for Explorer Panel
+ */
+class PrayerDataProvider {
+  constructor(context) {
+    this._context = context;
+    this._onDidChangeTreeData = new vscode.EventEmitter();
+    this.onDidChangeTreeData = this._onDidChangeTreeData.event;
+
+    // Prayer times state
+    this.prayerTimes = null;
+    this.nextPrayer = null;
+    this.currentLocation = null;
+    this.refreshInterval = null;
+
+    // Start auto-refresh every minute
+    this.startAutoRefresh();
+
+    // Load location from main extension
+    this.loadLocationFromMainExtension();
+  }
+
+  loadLocationFromMainExtension() {
+    // Get location data from the main extension's webview localStorage
+    // Since we can't directly access localStorage from Node.js, we'll use VS Code settings
+    // or try to get it from the main provider if available
+    if (
+      currentProvider &&
+      currentProvider._view &&
+      currentProvider._view.webview
+    ) {
+      // Ask the main webview for location data
+      currentProvider._view.webview.postMessage({
+        command: "getLocationData",
+      });
+
+      // Listen for location data response
+      const messageListener = currentProvider._view.webview.onDidReceiveMessage(
+        (message) => {
+          if (message.command === "locationDataResponse" && message.location) {
+            this.currentLocation = message.location;
+            this.refresh();
+            messageListener.dispose();
+          }
+        }
+      );
+    }
+  }
+
+  refresh() {
+    this.calculatePrayerTimes();
+    this._onDidChangeTreeData.fire();
+  }
+
+  startAutoRefresh() {
+    // Refresh every minute to update countdown
+    this.refreshInterval = setInterval(() => {
+      this.refresh();
+    }, 60000); // 60 seconds
+  }
+
+  getTreeItem(element) {
+    return element;
+  }
+
+  getChildren(element) {
+    if (!element) {
+      // Root level items
+      const items = [];
+
+      if (!this.currentLocation) {
+        // No location set
+        const locationItem = new vscode.TreeItem(
+          "Location not set",
+          vscode.TreeItemCollapsibleState.None
+        );
+        locationItem.description = "Set from main panel";
+        locationItem.iconPath = new vscode.ThemeIcon("location");
+        locationItem.command = {
+          command: "islamic-shoky.prayer.setLocation",
+          title: "Set Location",
+        };
+        items.push(locationItem);
+        return items;
+      }
+
+      if (!this.nextPrayer) {
+        // Loading or error state
+        const loadingItem = new vscode.TreeItem(
+          "Loading prayer times...",
+          vscode.TreeItemCollapsibleState.None
+        );
+        loadingItem.iconPath = new vscode.ThemeIcon("loading~spin");
+        items.push(loadingItem);
+        return items;
+      }
+
+      // Next prayer item
+      const nextPrayerItem = new vscode.TreeItem(
+        `Next: ${this.nextPrayer.name}`,
+        vscode.TreeItemCollapsibleState.None
+      );
+      nextPrayerItem.description = this.formatTime(this.nextPrayer.time);
+      nextPrayerItem.iconPath = new vscode.ThemeIcon("bell");
+      items.push(nextPrayerItem);
+
+      // Time remaining item
+      const remainingTime = this.getTimeRemaining();
+      if (remainingTime) {
+        const remainingItem = new vscode.TreeItem(
+          remainingTime,
+          vscode.TreeItemCollapsibleState.None
+        );
+        remainingItem.description = "remaining";
+        remainingItem.iconPath = new vscode.ThemeIcon("clock");
+        items.push(remainingItem);
+      }
+
+      // Location item
+      const locationItem = new vscode.TreeItem(
+        this.currentLocation.city || "Current Location",
+        vscode.TreeItemCollapsibleState.None
+      );
+      locationItem.description = `${this.currentLocation.country || ""}`;
+      locationItem.iconPath = new vscode.ThemeIcon("location");
+      items.push(locationItem);
+
+      return items;
+    }
+    return [];
+  }
+
+  calculatePrayerTimes() {
+    if (!this.currentLocation) {
+      // Try to load location from main extension again
+      this.loadLocationFromMainExtension();
+      return;
+    }
+
+    try {
+      const now = new Date();
+      const prayerNames = [
+        "Fajr",
+        "Sunrise",
+        "Dhuhr",
+        "Asr",
+        "Maghrib",
+        "Isha",
+      ];
+
+      // Simple prayer time calculation (simplified for demo)
+      // In a real implementation, you would use a proper Islamic prayer time library
+      const times = this.calculateSimplePrayerTimes(now);
+
+      this.prayerTimes = {};
+      prayerNames.forEach((name, index) => {
+        this.prayerTimes[name] = times[index];
+      });
+
+      // Find next prayer
+      this.findNextPrayer();
+    } catch (error) {
+      console.error("Error calculating prayer times:", error);
+    }
+  }
+
+  calculateSimplePrayerTimes(date) {
+    // This is a very simplified calculation for demonstration
+    // In a real implementation, use a proper Islamic calendar library
+    const times = [];
+
+    // Simplified prayer times (adjust based on actual calculation needs)
+    times.push(
+      new Date(date.getFullYear(), date.getMonth(), date.getDate(), 5, 30)
+    ); // Fajr
+    times.push(
+      new Date(date.getFullYear(), date.getMonth(), date.getDate(), 6, 45)
+    ); // Sunrise
+    times.push(
+      new Date(date.getFullYear(), date.getMonth(), date.getDate(), 12, 30)
+    ); // Dhuhr
+    times.push(
+      new Date(date.getFullYear(), date.getMonth(), date.getDate(), 15, 45)
+    ); // Asr
+    times.push(
+      new Date(date.getFullYear(), date.getMonth(), date.getDate(), 18, 15)
+    ); // Maghrib
+    times.push(
+      new Date(date.getFullYear(), date.getMonth(), date.getDate(), 19, 30)
+    ); // Isha
+
+    return times;
+  }
+
+  findNextPrayer() {
+    if (!this.prayerTimes) return;
+
+    const now = new Date();
+    const prayerNames = ["Fajr", "Sunrise", "Dhuhr", "Asr", "Maghrib", "Isha"];
+
+    // Find the next prayer time
+    for (const name of prayerNames) {
+      const prayerTime = this.prayerTimes[name];
+      if (prayerTime > now) {
+        this.nextPrayer = {
+          name: name,
+          time: prayerTime,
+        };
+        return;
+      }
+    }
+
+    // If no prayer found today, get tomorrow's Fajr
+    const tomorrow = new Date(now);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const tomorrowTimes = this.calculateSimplePrayerTimes(tomorrow);
+
+    this.nextPrayer = {
+      name: "Fajr",
+      time: tomorrowTimes[0],
+    };
+  }
+
+  formatTime(date) {
+    return date.toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: true,
+    });
+  }
+
+  getTimeRemaining() {
+    if (!this.nextPrayer) return null;
+
+    const now = new Date();
+    const diff = this.nextPrayer.time - now;
+
+    if (diff <= 0) return null;
+
+    const hours = Math.floor(diff / (1000 * 60 * 60));
+    const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+
+    if (hours > 0) {
+      return `${hours}h ${minutes}m`;
+    } else {
+      return `${minutes}m`;
+    }
+  }
+
+  async setLocation() {
+    // Redirect to main extension's location setting
+    if (
+      currentProvider &&
+      currentProvider._handleLocationRequest &&
+      currentProvider._view
+    ) {
+      currentProvider._handleLocationRequest(currentProvider._view);
+    } else {
+      vscode.window
+        .showInformationMessage(
+          "Please set your location from the main Islamic Shoky panel first.",
+          "Open Main Panel"
+        )
+        .then((selection) => {
+          if (selection === "Open Main Panel") {
+            vscode.commands.executeCommand(
+              "workbench.view.extension.islamic-shoky-sidebar"
+            );
+          }
+        });
+    }
+  }
+
+  dispose() {
+    if (this.refreshInterval) {
+      clearInterval(this.refreshInterval);
+      this.refreshInterval = null;
+    }
+  }
+}
+
+/**
+ * Tasks Data Provider Class for Explorer Panel
+ */
+class TasksDataProvider {
+  constructor(context) {
+    this._context = context;
+    this._onDidChangeTreeData = new vscode.EventEmitter();
+    this.onDidChangeTreeData = this._onDidChangeTreeData.event;
+
+    // Tasks state
+    this.tasks = [];
+
+    // Load tasks from main extension
+    this.loadTasksFromMainExtension();
+  }
+
+  refresh() {
+    this._onDidChangeTreeData.fire();
+  }
+
+  refreshFromMainExtension() {
+    this.loadTasksFromMainExtension();
+    this._onDidChangeTreeData.fire();
+  }
+
+  loadTasksFromMainExtension() {
+    // Get tasks data from the main extension's webview localStorage
+    if (
+      currentProvider &&
+      currentProvider._view &&
+      currentProvider._view.webview
+    ) {
+      // Ask the main webview for tasks data
+      currentProvider._view.webview.postMessage({
+        command: "getTasksData",
+      });
+    } else {
+      // If webview is not ready, retry after a short delay
+      setTimeout(() => {
+        this.loadTasksFromMainExtension();
+      }, 1000);
+    }
+  }
+
+  getTreeItem(element) {
+    const item = new vscode.TreeItem(
+      element.text,
+      vscode.TreeItemCollapsibleState.None
+    );
+
+    item.description = element.completed ? "✅ Completed" : "⏳ Pending";
+    item.iconPath = new vscode.ThemeIcon(
+      element.completed ? "check" : "circle-large-outline"
+    );
+    // Remove contextValue to disable context menus
+    item.tooltip = `${element.text} - ${
+      element.completed ? "Completed" : "Pending"
+    }`;
+
+    return item;
+  }
+
+  getChildren(element) {
+    if (!element) {
+      // Root level - return all tasks
+      if (this.tasks.length === 0) {
+        const emptyItem = new vscode.TreeItem(
+          "No tasks found",
+          vscode.TreeItemCollapsibleState.None
+        );
+        emptyItem.description = "Create tasks from the main panel";
+        emptyItem.iconPath = new vscode.ThemeIcon("info");
+        return [emptyItem];
+      }
+
+      return this.tasks;
+    }
+    return [];
+  }
+
+  updateTasks(tasks) {
+    console.log("TasksDataProvider: updateTasks called with:", tasks);
+    this.tasks = tasks || [];
+    console.log("TasksDataProvider: Updated tasks array:", this.tasks);
+    this.refresh();
+  }
+
+  async refreshTasks() {
+    console.log("[TasksDataProvider] refreshTasks called");
+    this.loadTasksFromMainExtension();
+    this._onDidChangeTreeData.fire();
+  }
+}
 
 /**
  * @param {vscode.ExtensionContext} context
@@ -1944,12 +2663,86 @@ function activate(context) {
     )
   );
 
+  // Register the timer data provider for Explorer panel
+  timerProvider = new TimerDataProvider(context);
+  context.subscriptions.push(
+    vscode.window.registerTreeDataProvider("islamic-shoky.timer", timerProvider)
+  );
+
+  // Register the prayer data provider for Explorer panel
+  prayerProvider = new PrayerDataProvider(context);
+  context.subscriptions.push(
+    vscode.window.registerTreeDataProvider(
+      "islamic-shoky.prayer",
+      prayerProvider
+    )
+  );
+
+  // Register the tasks data provider for Explorer panel
+  tasksProvider = new TasksDataProvider(context);
+  context.subscriptions.push(
+    vscode.window.registerTreeDataProvider("islamic-shoky.tasks", tasksProvider)
+  );
+
+  // Register timer commands
+  context.subscriptions.push(
+    vscode.commands.registerCommand("islamic-shoky.timer.start", () => {
+      timerProvider.startTimer();
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("islamic-shoky.timer.pause", () => {
+      timerProvider.pauseTimer();
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("islamic-shoky.timer.stop", () => {
+      timerProvider.stopTimer();
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("islamic-shoky.timer.refresh", () => {
+      timerProvider.refresh();
+    })
+  );
+
+  // Register prayer commands
+  context.subscriptions.push(
+    vscode.commands.registerCommand("islamic-shoky.prayer.refresh", () => {
+      prayerProvider.refresh();
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("islamic-shoky.prayer.setLocation", () => {
+      prayerProvider.setLocation();
+    })
+  );
+
+  // Register task commands
+  context.subscriptions.push(
+    vscode.commands.registerCommand("islamic-shoky.tasks.refresh", () => {
+      tasksProvider.refreshTasks();
+    })
+  );
+
   // Listen for configuration changes
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("islamic-shoky")) {
         // Refresh the webview when settings change
         currentProvider.refresh();
+        // Also refresh the timer if focus/break durations changed
+        if (
+          e.affectsConfiguration("islamic-shoky.focusDuration") ||
+          e.affectsConfiguration("islamic-shoky.breakDuration")
+        ) {
+          timerProvider.resetTimer();
+          timerProvider.refresh();
+        }
       }
     })
   );
@@ -1980,6 +2773,22 @@ function deactivate() {
   // Clear all prayer notification timeouts
   if (currentProvider && currentProvider._clearPrayerTimeouts) {
     currentProvider._clearPrayerTimeouts();
+  }
+
+  // Stop timer when extension is deactivated
+  if (timerProvider && timerProvider.interval) {
+    clearInterval(timerProvider.interval);
+    timerProvider.interval = null;
+  }
+
+  // Stop prayer provider refresh when extension is deactivated
+  if (prayerProvider && prayerProvider.dispose) {
+    prayerProvider.dispose();
+  }
+
+  // Clean up tasks provider when extension is deactivated
+  if (tasksProvider) {
+    tasksProvider.tasks = [];
   }
 }
 

@@ -2,7 +2,7 @@
   "name": "islamic-shoky",
   "displayName": "Islamic Shoky - Islamic Productivity Extension",
   "description": "A comprehensive Islamic productivity extension for VS Code featuring prayer times, daily azkar, pomodoro timer, todo list, and Islamic reminders to help Muslim developers maintain their faith while coding.",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "publisher": "jooexploit",
   "author": {
     "name": "jooexploit"
@@ -45,14 +45,52 @@
     "url": "https://github.com/jooexploit/islamic-shoky-extension/issues"
   },
   "activationEvents": [
-    "onView:islamic-shoky.panel"
+    "onView:islamic-shoky.panel",
+    "onView:islamic-shoky.timer",
+    "onView:islamic-shoky.prayer",
+    "onView:islamic-shoky.tasks"
   ],
   "main": "./extension.js",
   "contributes": {
     "commands": [
       {
-        "command": "islamic-shoky.helloWorld",
-        "title": "Hello World"
+        "command": "islamic-shoky.hello",
+        "title": "Hello Islamic Shoky"
+      },
+      {
+        "command": "islamic-shoky.timer.start",
+        "title": "▶️ Start Timer",
+        "icon": "$(play)"
+      },
+      {
+        "command": "islamic-shoky.timer.pause",
+        "title": "⏸️ Pause Timer",
+        "icon": "$(debug-pause)"
+      },
+      {
+        "command": "islamic-shoky.timer.stop",
+        "title": "⏹️ Stop Timer",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "islamic-shoky.timer.refresh",
+        "title": "🔄 Refresh Timer",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "islamic-shoky.prayer.refresh",
+        "title": "🔄 Refresh Prayer",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "islamic-shoky.prayer.setLocation",
+        "title": "📍 Set Location",
+        "icon": "$(location)"
+      },
+      {
+        "command": "islamic-shoky.tasks.refresh",
+        "title": "🔄 Refresh Tasks",
+        "icon": "$(refresh)"
       }
     ],
     "configuration": {
@@ -170,6 +208,68 @@
           "type": "webview",
           "icon": "media/logo.png",
           "contextualTitle": "Islamic Shoky"
+        }
+      ],
+      "explorer": [
+        {
+          "id": "islamic-shoky.timer",
+          "name": "Pomodoro Timer",
+          "type": "tree",
+          "icon": "$(clock)",
+          "contextualTitle": "Islamic Shoky Timer"
+        },
+        {
+          "id": "islamic-shoky.prayer",
+          "name": "Next Prayer",
+          "type": "tree",
+          "icon": "$(bell)",
+          "contextualTitle": "Next Prayer Time"
+        },
+        {
+          "id": "islamic-shoky.tasks",
+          "name": "Tasks",
+          "type": "tree",
+          "icon": "$(checklist)",
+          "contextualTitle": "Islamic Tasks"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "islamic-shoky.timer.start",
+          "when": "view == islamic-shoky.timer",
+          "group": "navigation@1"
+        },
+        {
+          "command": "islamic-shoky.timer.pause",
+          "when": "view == islamic-shoky.timer",
+          "group": "navigation@2"
+        },
+        {
+          "command": "islamic-shoky.timer.stop",
+          "when": "view == islamic-shoky.timer",
+          "group": "navigation@3"
+        },
+        {
+          "command": "islamic-shoky.timer.refresh",
+          "when": "view == islamic-shoky.timer",
+          "group": "navigation@4"
+        },
+        {
+          "command": "islamic-shoky.prayer.refresh",
+          "when": "view == islamic-shoky.prayer",
+          "group": "navigation@1"
+        },
+        {
+          "command": "islamic-shoky.prayer.setLocation",
+          "when": "view == islamic-shoky.prayer",
+          "group": "navigation@2"
+        },
+        {
+          "command": "islamic-shoky.tasks.refresh",
+          "when": "view == islamic-shoky.tasks",
+          "group": "navigation@1"
         }
       ]
     },

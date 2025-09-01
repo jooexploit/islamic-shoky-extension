@@ -1,8 +1,8 @@
 # Islamic Shoky - Islamic Productivity Extension
 
-[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](https://marketplace.visualstudio.com/items?itemName=islamic-shoky.islamic-shoky)
+[![Version](https://img.shields.io/badge/version-1.0.2-blue.svg)](https://marketplace.visualstudio.com/items?itemName=islamic-shoky.islamic-shoky)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![VS Code](https://img.shields.io/badge/VS_Code-1.74+-blue.svg)](https://code.visualstudio.com/)
+[![VS Code](https://img.shields.io/badge/VS_Code-1.103-blue.svg)](https://code.visualstudio.com/)
 
 A comprehensive Islamic productivity extension for Visual Studio Code that helps Muslim developers maintain their faith while coding. Islamic Shoky combines spiritual features with productivity tools to create a balanced development environment.
 
@@ -15,12 +15,24 @@ A comprehensive Islamic productivity extension for Visual Studio Code that helps
 - **Location Detection**: Automatic location detection or manual location setting
 - **Multiple Calculation Methods**: Choose from ISNA, Muslim World League, Umm Al-Qura, and more
 
+  ![Next prayer](img/next_prayer.png)
+
+- **also you can find it in Explorer tab**- **also you can find it in Explorer tab**
+
+  ![neext prayer exploer](img/next_prayer_exploer.png)
+
 ### 📿 Daily Azkar (Islamic Remembrances)
 
 - **Automatic Rotation**: Beautiful Islamic azkar that change automatically every 30 minutes
 - **Custom Azkar**: Add your own favorite azkar to the collection
+
+  ![custom azkar](img/custom_azkar.png)
 - **Sound Notifications**: Special audio notifications for Prophet Muhammad's azkar (ﷺ)
+  ![notfication](img/notfication.png)
 - **Arabic Text**: Authentic Arabic text with proper Islamic calligraphy
+
+  ![daily azkar](img/daily_azkar.png)
+
 
 ### ⏱️ Pomodoro Timer
 
@@ -28,12 +40,18 @@ A comprehensive Islamic productivity extension for Visual Studio Code that helps
 - **Break Reminders**: 5-minute breaks to maintain productivity
 - **Notifications**: Audio and visual notifications for session completion
 
+  ![pomodoro](img/pomodoro.png)
+
+
 ### ✅ Todo List
 
 - **Task Management**: Create, edit, and manage your programming tasks
 - **Priority Levels**: Organize tasks by priority
 - **Progress Tracking**: Mark tasks as complete and track your progress
 - **Local Storage**: Your tasks are saved locally and persist between sessions
+
+  ![to do list](img/to_do_list.png)
+
 
 ### 🎨 Beautiful UI
 
@@ -123,7 +141,6 @@ Islamic Shoky includes authentic Islamic content:
 
 ## 🔧 Requirements
 
-- Visual Studio Code 1.74.0 or higher
 - Internet connection for prayer times (optional, can work offline)
 - Audio support for sound notifications
 
@@ -154,6 +171,16 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **Email**: youseftamereg@gmail.com
 
 ## 🔄 Release Notes
+
+### 1.0.2
+
+- **Explorer Integration**: Added three new panels in Explorer sidebar (Timer, Next Prayer, Tasks)
+- **Pomodoro in Explorer**: Full pomodoro timer functionality directly accessible from Explorer
+- **Prayer Times in Explorer**: Next azan time always visible in Explorer panel
+- **Simplified Tasks Panel**: Converted Explorer tasks panel to read-only display for better reliability
+- **Quick Access Controls**: Timer and prayer location controls available in Explorer
+- **Improved Stability**: Fixed task synchronization issues and enhanced error handling
+- **Better Visual Feedback**: Enhanced task status indicators and cleaner empty states
 
 ### 1.0.0
 

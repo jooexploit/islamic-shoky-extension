@@ -5,6 +5,37 @@ All notable changes to **Islamic Shoky** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.2] - 2025-09-01
+
+### 🔧 Improvements
+
+#### 📋 Tasks Panel Simplification
+
+- **Simplified Tasks Panel**: Converted tasks panel in Explorer to read-only display for better reliability
+- **Removed Task Manipulation**: Removed add, toggle, and delete functionality from Explorer tasks panel
+- **Enhanced User Experience**: Tasks panel now shows a clean view of tasks with refresh capability
+- **Improved Stability**: Eliminated synchronization issues by making Explorer tasks panel display-only
+- **Cleaner Interface**: Removed context menus and inline buttons for a streamlined experience
+
+#### 🚀 Explorer Integration
+
+- **Pomodoro Timer Panel**: Added dedicated pomodoro timer panel in Explorer sidebar for easy access
+- **Prayer Times Panel**: Added next prayer (azan) display panel in Explorer sidebar for quick reference
+- **Quick Access Controls**: Timer controls (start, pause, stop, reset) directly available in Explorer
+- **Location Management**: Prayer location settings accessible from Explorer panel
+- **Seamless Workflow**: Access core features without switching between different views
+
+### ✨ What's New
+
+- **Explorer Panels**: Three new panels in Explorer - Timer, Next Prayer, and Tasks
+- **Integrated Pomodoro**: Full pomodoro timer functionality in Explorer sidebar
+- **Prayer at a Glance**: Next azan time always visible in Explorer
+- **Read-Only Tasks Display**: View all your tasks directly in the Explorer panel
+- **One-Click Refresh**: Simple refresh button to sync with main sidebar tasks
+- **Better Visual Feedback**: Improved task status indicators (✅ Completed, ⏳ Pending)
+- **Cleaner Empty State**: Better messaging when no tasks are available
+
+
 ## [1.0.0] - 2025-01-29
 
 ### 🎉 Initial Release
