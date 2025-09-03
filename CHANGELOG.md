@@ -5,6 +5,54 @@ All notable changes to **Islamic Shoky** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2025-09-03
+
+### ✨ New Features
+
+#### 🎵 Quran Audio Player
+
+- **Audio Playback**: Added comprehensive Quran audio player functionality
+- **Recitation Support**: Support for various renowned Quran reciters
+- **Chapter Navigation**: Easy navigation through Quran chapters (Surahs)
+- **Verse Control**: Play, pause, stop, and skip between verses
+- **Audio Quality**: High-quality audio streaming for spiritual listening
+- **Background Play**: Continue listening while coding
+
+#### 🎨 UI Enhancements
+
+- **Modern Interface**: Completely redesigned user interface for better user experience
+- **Improved Navigation**: Enhanced sidebar navigation and panel organization
+- **Visual Polish**: Better spacing, typography, and visual hierarchy
+- **Responsive Design**: Optimized layouts for different screen sizes
+- **Accessibility**: Improved accessibility features and keyboard navigation
+- **Theme Integration**: Better integration with VS Code themes and colors
+
+#### 📿 Extended Azkar & Duaa Collection
+
+- **More Azkar**: Added extensive collection of authentic Islamic azkar
+- **Daily Duaa**: Comprehensive daily duaa (supplications) collection
+- **Morning/Evening Azkar**: Dedicated morning and evening remembrances
+- **Prayer-specific Azkar**: Azkar for different prayer times
+- **Special Occasions**: Azkar for special Islamic occasions and events
+- **Audio Support**: Audio playback for proper pronunciation guidance
+
+### 🔧 Bug Fixes & Improvements
+
+- **Performance Optimization**: Improved extension loading and response times
+- **Memory Management**: Better memory usage and cleanup
+- **Error Handling**: Enhanced error handling and user feedback
+- **API Reliability**: Improved reliability of prayer times and location services
+- **Notification System**: Fixed notification timing and display issues
+- **Data Persistence**: Improved local storage reliability and data integrity
+
+### 🚀 Technical Improvements
+
+- **Code Refactoring**: Cleaner, more maintainable codebase
+- **State Management**: Improved application state handling
+- **Event System**: Better event handling and component communication
+- **Resource Loading**: Optimized resource loading and caching
+- **Cross-platform**: Enhanced cross-platform compatibility
+
 ## [1.0.2] - 2025-09-01
 
 ### 🔧 Improvements
@@ -34,7 +82,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **One-Click Refresh**: Simple refresh button to sync with main sidebar tasks
 - **Better Visual Feedback**: Improved task status indicators (✅ Completed, ⏳ Pending)
 - **Cleaner Empty State**: Better messaging when no tasks are available
-
 
 ## [1.0.0] - 2025-01-29
 

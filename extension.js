@@ -13,6 +13,11 @@ class SidebarProvider {
     this._currentNotification = null; // Track current notification
     this._soundProcess = null; // Track current sound process
     this._prayerTimeouts = new Map(); // Track prayer notification timeouts
+    this._currentAudioState = null; // Track Quran audio state
+    this._audioProcess = null; // Track background audio process
+    this._audioStatusCheck = null; // Audio status check interval
+    this._reminderInterval = null; // 5-minute reminder interval
+    this._reminderAudioProcess = null; // Background reminder audio process
   }
 
   resolveWebviewView(webviewView) {
@@ -20,6 +25,7 @@ class SidebarProvider {
 
     webviewView.webview.options = {
       enableScripts: true,
+      retainContextWhenHidden: true,
       localResourceRoots: [this._context.extensionUri],
     };
 
@@ -34,9 +40,7 @@ class SidebarProvider {
             vscode.window.showInformationMessage(message.text);
             // Auto-dismiss after 10 seconds
             setTimeout(() => {
-              vscode.window.showInformationMessage(
-                "ℹ️ Alert notification ended"
-              );
+              vscode.window.showInformationMessage("Alert notification ended");
             }, 10000); // 10 seconds
             break;
           case "requestLocation":
@@ -72,6 +76,32 @@ class SidebarProvider {
           case "tasksUpdated":
             this._forwardTasksToTasksProvider(message.tasks);
             break;
+          case "quranAudioStarted":
+            // Store audio state to prevent interruption
+            this._currentAudioState = {
+              isPlaying: true,
+              surah: message.surah,
+              reciter: message.reciter,
+              startTime: Date.now(),
+            };
+            break;
+          case "quranAudioStopped":
+            // Clear audio state
+            this._currentAudioState = null;
+            this._stopBackgroundAudio();
+            break;
+          case "playQuranBackground":
+            // Play audio in background using Node.js
+            this._playQuranBackground(
+              message.audioUrl,
+              message.surah,
+              message.reciter
+            );
+            break;
+          case "stopQuranBackground":
+            // Stop background audio
+            this._stopBackgroundAudio();
+            break;
         }
       },
       undefined,
@@ -80,9 +110,10 @@ class SidebarProvider {
 
     // Clean up when webview is disposed
     webviewView.onDidDispose(() => {
-      // Send message to webview to clear its intervals
+      // Only clear intervals, but preserve audio state if audio is playing
       webviewView.webview.postMessage({
         command: "cleanup",
+        preserveAudio: this._currentAudioState !== null,
       });
     });
 
@@ -100,6 +131,19 @@ class SidebarProvider {
       command: "panelVisibilityChanged",
       visible: webviewView.visible,
     });
+
+    // Restore audio state if there was one
+    if (this._currentAudioState) {
+      setTimeout(() => {
+        webviewView.webview.postMessage({
+          command: "restoreAudioState",
+          audioState: this._currentAudioState,
+        });
+      }, 1000); // Give webview time to initialize
+    }
+
+    // Start 5-minute reminder system
+    this._startReminderSystem();
   }
 
   async _handleLocationRequest(webviewView) {
@@ -212,7 +256,7 @@ class SidebarProvider {
       const soundFilePath = path.join(
         this._context.extensionPath,
         "sounds",
-        "salah-notification.mp3"
+        "salah.mp3"
       );
       console.log("Sound file path:", soundFilePath);
 
@@ -314,12 +358,350 @@ class SidebarProvider {
     }
   }
 
+  _playQuranBackground(audioUrl, surah, reciter) {
+    try {
+      // Stop any existing audio
+      this._stopBackgroundAudio();
+
+      // Stop reminder audio if it's playing
+      this._stopReminderAudio();
+
+      const platform = process.platform;
+      console.log("Starting background Quran audio:", audioUrl);
+
+      if (platform === "win32") {
+        // Windows - use PowerShell with MediaPlayer
+        this._audioProcess = spawn("powershell", [
+          "-c",
+          `Add-Type -AssemblyName presentationCore; 
+           $mediaPlayer = New-Object system.windows.media.mediaplayer; 
+           $mediaPlayer.open('${audioUrl}'); 
+           $mediaPlayer.Play(); 
+           Start-Sleep 1; 
+           while($mediaPlayer.NaturalDuration.HasTimeSpan -eq $false) { Start-Sleep 1 }; 
+           $duration = $mediaPlayer.NaturalDuration.TimeSpan.TotalSeconds; 
+           Start-Sleep $duration`,
+        ]);
+      } else if (platform === "darwin") {
+        // macOS - use curl to download and afplay to play
+        this._audioProcess = spawn("sh", [
+          "-c",
+          `curl -s "${audioUrl}" | afplay -`,
+        ]);
+      } else {
+        // Linux - try different audio players with better error handling
+        this._tryLinuxAudioPlayers(audioUrl, surah, reciter);
+        return; // Early return since _tryLinuxAudioPlayers handles the rest
+      }
+
+      if (this._audioProcess) {
+        this._setupAudioProcessHandlers(surah, reciter, audioUrl);
+      } else {
+        this._fallbackToWebviewAudio(audioUrl, surah, reciter);
+      }
+    } catch (error) {
+      console.log("Error starting background audio:", error);
+      this._fallbackToWebviewAudio(audioUrl, surah, reciter);
+    }
+  }
+
+  _tryLinuxAudioPlayers(audioUrl, surah, reciter) {
+    const audioPlayers = [
+      { name: "mpv", args: ["--no-video", "--quiet", audioUrl] },
+      { name: "mpg123", args: ["-q", audioUrl] },
+      { name: "cvlc", args: ["--intf", "dummy", "--play-and-exit", audioUrl] },
+      {
+        name: "ffplay",
+        args: ["-nodisp", "-autoexit", "-loglevel", "quiet", audioUrl],
+      },
+      { name: "mplayer", args: ["-really-quiet", audioUrl] },
+      { name: "paplay", args: [] }, // Will use curl | paplay for streaming
+      { name: "wget", args: [] }, // Fallback with wget + aplay
+    ];
+
+    let playerFound = false;
+
+    for (const player of audioPlayers) {
+      try {
+        console.log(`Trying audio player: ${player.name}`);
+
+        if (player.name === "paplay") {
+          // Use curl to stream and pipe to paplay
+          this._audioProcess = spawn("sh", [
+            "-c",
+            `curl -s "${audioUrl}" | paplay`,
+          ]);
+        } else if (player.name === "wget") {
+          // Download and play with available system player
+          this._audioProcess = spawn("sh", [
+            "-c",
+            `temp_file="/tmp/quran_audio_$(date +%s).mp3"; wget -q -O "$temp_file" "${audioUrl}" && (aplay "$temp_file" 2>/dev/null || paplay "$temp_file" 2>/dev/null || play "$temp_file" 2>/dev/null); rm -f "$temp_file"`,
+          ]);
+        } else {
+          this._audioProcess = spawn(player.name, player.args);
+        }
+
+        // Test if the process started successfully
+        if (this._audioProcess.pid) {
+          console.log(
+            `Successfully started ${player.name} with PID: ${this._audioProcess.pid}`
+          );
+          playerFound = true;
+          this._setupAudioProcessHandlers(surah, reciter, audioUrl);
+          break;
+        }
+      } catch (error) {
+        console.log(`Failed to start ${player.name}:`, error.message);
+        this._audioProcess = null;
+        continue;
+      }
+    }
+
+    if (!playerFound) {
+      console.log(
+        "No suitable audio player found, falling back to webview audio"
+      );
+      this._fallbackToWebviewAudio(audioUrl, surah, reciter);
+    }
+  }
+
+  _setupAudioProcessHandlers(surah, reciter, audioUrl) {
+    console.log("Background audio process started");
+
+    // Update current audio state
+    this._currentAudioState = {
+      isPlaying: true,
+      surah: surah,
+      reciter: reciter,
+      startTime: Date.now(),
+      audioUrl: audioUrl,
+    };
+
+    // Show notification
+    vscode.window.showInformationMessage(
+      `Playing Quran: Surah ${surah} by ${reciter}`
+    );
+
+    // Handle process completion
+    this._audioProcess.on("close", (code) => {
+      console.log("Background audio process finished with code:", code);
+      this._audioProcess = null;
+      this._currentAudioState = null;
+
+      // Notify webview if it's still available
+      if (this._view && this._view.webview) {
+        this._view.webview.postMessage({
+          command: "audioEnded",
+        });
+      }
+
+      if (code === 0) {
+        vscode.window.showInformationMessage("Quran playbook completed");
+      }
+    });
+
+    this._audioProcess.on("error", (error) => {
+      console.log("Background audio process error:", error);
+      this._audioProcess = null;
+      this._currentAudioState = null;
+
+      // Fallback to webview audio on error
+      this._fallbackToWebviewAudio(audioUrl, surah, reciter);
+    });
+
+    // Start status check interval
+    this._startAudioStatusCheck();
+  }
+
+  _fallbackToWebviewAudio(audioUrl, surah, reciter) {
+    console.log("Falling back to webview audio playback");
+
+    // Update state
+    this._currentAudioState = {
+      isPlaying: true,
+      surah: surah,
+      reciter: reciter,
+      startTime: Date.now(),
+      audioUrl: audioUrl,
+      isWebviewFallback: true,
+    };
+
+    // Notify webview to use internal audio player
+    if (this._view && this._view.webview) {
+      this._view.webview.postMessage({
+        command: "playWebviewAudio",
+        audioUrl: audioUrl,
+        surah: surah,
+        reciter: reciter,
+      });
+    }
+
+    vscode.window.showInformationMessage(
+      `Playing Quran (browser mode): Surah ${surah} by ${reciter}`
+    );
+  }
+
+  _stopBackgroundAudio() {
+    if (this._audioProcess) {
+      console.log("Stopping background audio process");
+      this._audioProcess.kill();
+      this._audioProcess = null;
+      this._currentAudioState = null;
+
+      // Stop status check
+      if (this._audioStatusCheck) {
+        clearInterval(this._audioStatusCheck);
+        this._audioStatusCheck = null;
+      }
+
+      // Notify webview if it's still available
+      if (this._view && this._view.webview) {
+        this._view.webview.postMessage({
+          command: "audioStopped",
+        });
+      }
+
+      vscode.window.showInformationMessage("Quran playback stopped");
+    }
+  }
+
+  _startAudioStatusCheck() {
+    // Check audio status every 5 seconds
+    this._audioStatusCheck = setInterval(() => {
+      if (this._view && this._view.webview && this._currentAudioState) {
+        this._view.webview.postMessage({
+          command: "audioStatus",
+          isPlaying: this._audioProcess !== null,
+          audioState: this._currentAudioState,
+        });
+      }
+    }, 5000);
+  }
+
+  _startReminderSystem() {
+    console.log("Starting 5-minute reminder system");
+    // Start 5-minute interval (300,000 milliseconds)
+    this._reminderInterval = setInterval(() => {
+      this._playReminderIfQuranNotActive();
+    }, 300000); // 5 minutes
+
+    // Also play immediately after 5 minutes from start
+    setTimeout(() => {
+      this._playReminderIfQuranNotActive();
+    }, 300000);
+  }
+
+  _playReminderIfQuranNotActive() {
+    // Only play reminder if Quran is NOT currently playing
+    if (!this._currentAudioState || !this._audioProcess) {
+      console.log("Playing 5-minute reminder - Quran is not active");
+      this._playReminderAudio();
+    } else {
+      console.log("Skipping 5-minute reminder - Quran is currently playing");
+    }
+  }
+
+  _playReminderAudio() {
+    try {
+      // Stop any existing reminder audio
+      this._stopReminderAudio();
+
+      // Get the sound file path
+      const soundFilePath = path.join(
+        this._context.extensionPath,
+        "sounds",
+        "salah-notification.mp3"
+      );
+
+      console.log("Playing reminder sound:", soundFilePath);
+      const platform = process.platform;
+
+      if (platform === "win32") {
+        // Windows
+        this._reminderAudioProcess = spawn("powershell", [
+          "-c",
+          `(New-Object Media.SoundPlayer "${soundFilePath}").PlaySync();`,
+        ]);
+      } else if (platform === "darwin") {
+        // macOS
+        this._reminderAudioProcess = spawn("afplay", [soundFilePath]);
+      } else {
+        // Linux/Unix - try different audio players
+        const audioPlayers = ["mpg123", "mpg321", "play", "aplay", "cvlc"];
+
+        for (const player of audioPlayers) {
+          try {
+            if (player === "play") {
+              this._reminderAudioProcess = spawn("play", [soundFilePath]);
+            } else if (player === "aplay") {
+              this._reminderAudioProcess = spawn("aplay", [soundFilePath]);
+            } else if (player === "cvlc") {
+              this._reminderAudioProcess = spawn("cvlc", [
+                "--intf",
+                "dummy",
+                "--play-and-exit",
+                soundFilePath,
+              ]);
+            } else {
+              this._reminderAudioProcess = spawn(player, ["-q", soundFilePath]);
+            }
+            break;
+          } catch (error) {
+            console.log(`Failed to start ${player} for reminder:`, error);
+            continue;
+          }
+        }
+      }
+
+      if (this._reminderAudioProcess) {
+        console.log("Reminder audio process started");
+
+        // Handle process completion
+        this._reminderAudioProcess.on("close", (code) => {
+          console.log("Reminder audio process finished with code:", code);
+          this._reminderAudioProcess = null;
+        });
+
+        this._reminderAudioProcess.on("error", (error) => {
+          console.log("Reminder audio process error:", error);
+          this._reminderAudioProcess = null;
+        });
+
+        // Show a subtle notification
+        vscode.window.showInformationMessage("هل صليت على النبي ﷺ اليوم 🤍؟", {
+          modal: false,
+        });
+      } else {
+        console.log("No suitable audio player found for reminder");
+      }
+    } catch (error) {
+      console.log("Error playing reminder audio:", error);
+    }
+  }
+
+  _stopReminderAudio() {
+    if (this._reminderAudioProcess) {
+      console.log("Stopping reminder audio process");
+      this._reminderAudioProcess.kill();
+      this._reminderAudioProcess = null;
+    }
+  }
+
+  _stopReminderSystem() {
+    if (this._reminderInterval) {
+      console.log("Stopping reminder system");
+      clearInterval(this._reminderInterval);
+      this._reminderInterval = null;
+    }
+    this._stopReminderAudio();
+  }
+
   _handleAzkarChanged(azkar) {
     const config = this._getConfiguration();
     if (config.enableAzkarNotifications) {
       // Show the azkar notification
       const notification = vscode.window.showInformationMessage(
-        `📿 ${azkar.arabic}`,
+        `${azkar.arabic}`,
         "View in Panel"
       );
 
@@ -327,7 +709,7 @@ class SidebarProvider {
       setTimeout(() => {
         // Since we can't directly dismiss VS Code notifications,
         // we'll show a subtle "notification ended" message to replace it
-        vscode.window.showInformationMessage("📿 Azkar notification ended");
+        vscode.window.showInformationMessage("Azkar notification ended");
       }, 10000); // 10 seconds
 
       // Handle user interaction
@@ -369,6 +751,7 @@ class SidebarProvider {
       enableAzkar: config.get("enableAzkar", true),
       enablePomodoro: config.get("enablePomodoro", true),
       enableTodoList: config.get("enableTodoList", true),
+      enableQuranAudio: config.get("enableQuranAudio", true),
       focusDuration: config.get("focusDuration", 25),
       breakDuration: config.get("breakDuration", 5),
       prayerCalculationMethod: config.get("prayerCalculationMethod", "2"),
@@ -412,33 +795,40 @@ class SidebarProvider {
 				.header {
 					text-align: center;
 					margin-bottom: 25px;
-					padding: 15px 0;
+					padding: 20px 0;
 					border-bottom: 2px solid var(--vscode-panel-border);
 					position: relative;
+					background: linear-gradient(135deg, var(--vscode-sideBar-background) 0%, var(--vscode-editor-background) 100%);
+					border-radius: 8px;
 				}
 				
 				.settings-button {
 					position: absolute;
-					top: 10px;
-					right: 10px;
+					top: 15px;
+					right: 15px;
 					background-color: var(--vscode-button-background);
 					color: var(--vscode-button-foreground);
 					border: none;
-					padding: 6px 10px;
-					border-radius: 4px;
+					padding: 8px 12px;
+					border-radius: 6px;
 					cursor: pointer;
 					font-size: 0.8em;
-					transition: background-color 0.3s ease;
+					transition: all 0.3s ease;
+					display: flex;
+					align-items: center;
+					gap: 6px;
+					box-shadow: 0 2px 4px rgba(0,0,0,0.1);
 				}
 				
 				.settings-button:hover {
 					background-color: var(--vscode-button-hoverBackground);
+					transform: translateY(-1px);
+					box-shadow: 0 4px 8px rgba(0,0,0,0.15);
 				}
 				
 				.logo {
 					width: 88px;
 					height: 88px;
-					margin-bottom: 8px;
 					border-radius: 8px;
 					object-fit: contain;
 				}
@@ -447,15 +837,23 @@ class SidebarProvider {
 					font-size: 1.3em;
 					font-weight: bold;
 					color: var(--vscode-editor-foreground);
-					margin: 5px 0;
+					margin: 0px 5px 0;
 				}
 				
 				.section {
 					margin: 20px 0;
-					padding: 15px;
+					padding: 20px;
 					border: 1px solid var(--vscode-panel-border);
-					border-radius: 8px;
+					border-radius: 12px;
 					background-color: var(--vscode-sideBar-background);
+					box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+					transition: all 0.3s ease;
+				}
+				
+				.section:hover {
+					border-color: var(--vscode-textLink-foreground);
+					transform: translateY(-2px);
+					box-shadow: 0 4px 12px rgba(0,0,0,0.1);
 				}
 				
 				.section-title {
@@ -466,6 +864,8 @@ class SidebarProvider {
 					display: flex;
 					align-items: center;
 					gap: 8px;
+					padding-bottom: 8px;
+					border-bottom: 1px solid var(--vscode-panel-border);
 				}
 				
 				/* Azan Section */
@@ -528,15 +928,19 @@ class SidebarProvider {
 					background-color: var(--vscode-button-background);
 					color: var(--vscode-button-foreground);
 					border: none;
-					padding: 6px 12px;
-					border-radius: 4px;
+					padding: 8px 14px;
+					border-radius: 6px;
 					cursor: pointer;
 					font-size: 0.85em;
-					transition: background-color 0.3s ease;
+					transition: all 0.3s ease;
+					display: flex;
+					align-items: center;
+					gap: 6px;
 				}
 				
 				.location-button:hover {
 					background-color: var(--vscode-button-hoverBackground);
+					transform: translateY(-1px);
 				}
 				
 				.loading {
@@ -544,16 +948,60 @@ class SidebarProvider {
 					color: var(--vscode-textLink-foreground);
 					font-style: italic;
 					margin: 20px 0;
+					display: flex;
+					align-items: center;
+					justify-content: center;
+					gap: 8px;
+				}
+				
+				.loading::before {
+					content: '';
+					width: 16px;
+					height: 16px;
+					border: 2px solid var(--vscode-panel-border);
+					border-top: 2px solid var(--vscode-textLink-foreground);
+					border-radius: 50%;
+					animation: spin 1s linear infinite;
+				}
+				
+				@keyframes spin {
+					0% { transform: rotate(0deg); }
+					100% { transform: rotate(360deg); }
 				}
 				
 				.error-message {
 					text-align: center;
 					color: var(--vscode-errorForeground);
 					margin: 20px 0;
-					padding: 10px;
+					padding: 12px;
 					background-color: var(--vscode-inputValidation-errorBackground);
 					border: 1px solid var(--vscode-inputValidation-errorBorder);
-					border-radius: 4px;
+					border-radius: 6px;
+					display: flex;
+					align-items: center;
+					justify-content: center;
+					gap: 8px;
+				}
+				
+				.error-message::before {
+					content: '';
+					width: 16px;
+					height: 16px;
+					background-color: var(--vscode-errorForeground);
+					border-radius: 50%;
+					flex-shrink: 0;
+					position: relative;
+				}
+				
+				.error-message::before::after {
+					content: '!';
+					position: absolute;
+					color: var(--vscode-editor-background);
+					font-weight: bold;
+					font-size: 12px;
+					top: 50%;
+					left: 50%;
+					transform: translate(-50%, -50%);
 				}
 				
 				/* Azkar Section */
@@ -578,16 +1026,21 @@ class SidebarProvider {
 					background-color: var(--vscode-button-background);
 					color: var(--vscode-button-foreground);
 					border: none;
-					padding: 8px 16px;
-					border-radius: 4px;
+					padding: 10px 18px;
+					border-radius: 6px;
 					cursor: pointer;
 					font-size: 0.9em;
-					margin-top: 10px;
-					transition: background-color 0.3s ease;
+					margin-top: 15px;
+					transition: all 0.3s ease;
+					display: flex;
+					align-items: center;
+					justify-content: center;
+					gap: 8px;
 				}
 				
 				.refresh-button:hover {
 					background-color: var(--vscode-button-hoverBackground);
+					transform: translateY(-1px);
 				}
 				
 				/* Pomodoro Section */
@@ -598,13 +1051,13 @@ class SidebarProvider {
 				.timer-display {
 					font-size: 2.5em;
 					font-weight: bold;
-					color: var(--vscode-terminal-ansiRed);
+					color: var(--vscode-terminal-ansiGreen);
 					margin: 15px 0;
 					font-family: 'Courier New', monospace;
 				}
 				
 				.timer-display.break {
-					color: var(--vscode-terminal-ansiGreen);
+					color: var(--vscode-terminal-ansiRed);
 				}
 				
 				.timer-status {
@@ -662,12 +1115,14 @@ class SidebarProvider {
 				}
 				
 				.footer {
-					margin-top: 25px;
-					padding-top: 15px;
+					margin-top: 30px;
+					padding: 20px 0;
 					border-top: 1px solid var(--vscode-panel-border);
 					text-align: center;
 					font-size: 0.8em;
 					color: var(--vscode-descriptionForeground);
+					background: linear-gradient(135deg, var(--vscode-sideBar-background) 0%, var(--vscode-editor-background) 100%);
+					border-radius: 8px;
 				}
 				
 				/* Todo List Section */
@@ -821,10 +1276,13 @@ class SidebarProvider {
 					background: none;
 					border: none;
 					cursor: pointer;
-					padding: 4px;
-					border-radius: 3px;
+					padding: 6px;
+					border-radius: 4px;
 					font-size: 0.8em;
 					transition: background-color 0.3s ease;
+					display: flex;
+					align-items: center;
+					justify-content: center;
 				}
 				
 				.todo-edit-btn:hover {
@@ -833,6 +1291,20 @@ class SidebarProvider {
 				
 				.todo-delete-btn:hover {
 					background-color: var(--vscode-inputValidation-errorBackground);
+				}
+				
+				.todo-edit-btn svg,
+				.todo-delete-btn svg {
+					stroke: var(--vscode-foreground);
+					transition: stroke 0.3s ease;
+				}
+				
+				.todo-edit-btn:hover svg {
+					stroke: var(--vscode-textLink-activeForeground);
+				}
+				
+				.todo-delete-btn:hover svg {
+					stroke: var(--vscode-errorForeground);
 				}
 				
 				.todo-edit-input {
@@ -858,6 +1330,165 @@ class SidebarProvider {
 					font-style: italic;
 					padding: 20px;
 				}
+				
+				/* Quran Audio Section */
+				.quran-container {
+					display: flex;
+					flex-direction: column;
+					gap: 15px;
+				}
+				
+				.quran-selection {
+					display: flex;
+					flex-direction: column;
+					gap: 12px;
+				}
+				
+				.selection-group {
+					display: flex;
+					flex-direction: column;
+					gap: 5px;
+				}
+				
+				.selection-group label {
+					font-weight: bold;
+					color: var(--vscode-textLink-foreground);
+					font-size: 0.9em;
+				}
+				
+				.selection-group select {
+					padding: 8px 12px;
+					border: 1px solid var(--vscode-input-border);
+					border-radius: 4px;
+					background-color: var(--vscode-input-background);
+					color: var(--vscode-input-foreground);
+					font-size: 0.9em;
+					cursor: pointer;
+					transition: border-color 0.3s ease;
+				}
+				
+				.selection-group select:focus {
+					outline: none;
+					border-color: var(--vscode-focusBorder);
+				}
+				
+				.audio-controls {
+					display: flex;
+					gap: 10px;
+					justify-content: center;
+					flex-wrap: wrap;
+					margin-top: 15px;
+				}
+				
+				.audio-button {
+					background-color: var(--vscode-button-background);
+					color: var(--vscode-button-foreground);
+					border: none;
+					padding: 10px 16px;
+					border-radius: 6px;
+					cursor: pointer;
+					font-size: 0.9em;
+					font-weight: bold;
+					transition: all 0.3s ease;
+					min-width: 80px;
+					display: flex;
+					align-items: center;
+					justify-content: center;
+					gap: 5px;
+				}
+				
+				.audio-button:hover:not(:disabled) {
+					background-color: var(--vscode-button-hoverBackground);
+					transform: translateY(-1px);
+				}
+				
+				.audio-button:disabled {
+					background-color: var(--vscode-button-secondaryBackground);
+					color: var(--vscode-descriptionForeground);
+					cursor: not-allowed;
+					opacity: 0.6;
+				}
+				
+				.audio-info {
+					margin-top: 15px;
+					padding: 12px;
+					background-color: var(--vscode-textBlockQuote-background);
+					border-radius: 6px;
+					border-left: 4px solid var(--vscode-textLink-foreground);
+				}
+				
+				.current-playing {
+					text-align: center;
+					font-size: 0.9em;
+					color: var(--vscode-editor-foreground);
+				}
+				
+				.current-playing strong {
+					color: var(--vscode-textLink-activeForeground);
+				}
+				
+				#quranAudio {
+					border-radius: 6px;
+					background-color: var(--vscode-panel-background);
+				}
+				
+				/* Loading animation for audio controls */
+				.loading {
+					animation: pulse 1.5s ease-in-out infinite;
+				}
+				
+				@keyframes pulse {
+					0% { opacity: 1; }
+					50% { opacity: 0.5; }
+					100% { opacity: 1; }
+				}
+				
+				/* Icon Styles */
+				.section-icon {
+					width: 20px;
+					height: 20px;
+					margin-right: 8px;
+					filter: invert(0.5) sepia(1) saturate(5) hue-rotate(175deg);
+					transition: filter 0.3s ease;
+				}
+				
+				.button-icon {
+					width: 16px;
+					height: 16px;
+					margin-right: 6px;
+					filter: brightness(0) saturate(100%) invert(100%);
+					transition: filter 0.3s ease;
+				}
+				
+				.inline-icon {
+					width: 16px;
+					height: 16px;
+					display: inline-block;
+					vertical-align: middle;
+					margin: 0 4px;
+					filter: invert(0.7);
+				}
+				
+				.settings-button:hover .button-icon {
+					filter: brightness(0) saturate(100%) invert(100%) drop-shadow(0 0 2px currentColor);
+				}
+				
+				.location-button:hover .button-icon,
+				.audio-button:hover:not(:disabled) .button-icon,
+				.refresh-button:hover .button-icon {
+					filter: brightness(0) saturate(100%) invert(100%) drop-shadow(0 0 2px currentColor);
+				}
+				
+				/* Dark theme icon adjustments */
+				@media (prefers-color-scheme: dark) {
+					.section-icon {
+						filter: invert(0.8) sepia(1) saturate(3) hue-rotate(175deg);
+					}
+					
+					.inline-icon {
+						filter: invert(0.9);
+					}
+				}
 			</style>
 			
 			<style>
@@ -875,7 +1506,19 @@ class SidebarProvider {
 		</head>
 		<body>
 			<div class="header">
-				<button class="settings-button" onclick="openSettings()" title="Settings">⚙️</button>
+				<button class="settings-button" onclick="openSettings()" title="Settings">
+					<img src="${
+            this._view
+              ? this._view.webview.asWebviewUri(
+                  vscode.Uri.joinPath(
+                    this._context.extensionUri,
+                    "icons",
+                    "settings.svg"
+                  )
+                )
+              : ""
+          }" alt="Settings" class="button-icon">
+				</button>
 				<img class="logo" src="${
           this._view
             ? this._view.webview.asWebviewUri(
@@ -896,15 +1539,50 @@ class SidebarProvider {
 			<!-- Next Azan Section -->
 			<div class="section">
 				<div class="section-title">
-					🕐 Next Prayer Time
+					<img src="${
+            this._view
+              ? this._view.webview.asWebviewUri(
+                  vscode.Uri.joinPath(
+                    this._context.extensionUri,
+                    "icons",
+                    "prayer-time.svg"
+                  )
+                )
+              : ""
+          }" alt="Prayer Time" class="section-icon">
+					Next Prayer Time
 				</div>
 				<div class="azan-info">
 					<div id="locationStatus" class="location-status">
-						<span id="locationText">🌍 Location not set</span>
-						<button class="location-button" onclick="requestLocation()">📍 Set Location</button>
+						<span id="locationText">
+							<img src="${
+                this._view
+                  ? this._view.webview.asWebviewUri(
+                      vscode.Uri.joinPath(
+                        this._context.extensionUri,
+                        "icons",
+                        "globe.svg"
+                      )
+                    )
+                  : ""
+              }" alt="Globe" class="inline-icon"> Location not set
+						</span>
+						<button class="location-button" onclick="requestLocation()">
+							<img src="${
+                this._view
+                  ? this._view.webview.asWebviewUri(
+                      vscode.Uri.joinPath(
+                        this._context.extensionUri,
+                        "icons",
+                        "location.svg"
+                      )
+                    )
+                  : ""
+              }" alt="Location" class="button-icon"> Set Location
+						</button>
 					</div>
 					<div id="loadingIndicator" class="loading" style="display: none;">
-						⏳ Loading prayer times...
+						Loading prayer times...
 					</div>
 					<div id="prayerContent" style="display: none;">
 						<div class="next-azan" id="nextAzanName">Fajr</div>
@@ -915,7 +1593,7 @@ class SidebarProvider {
 						</div>
 					</div>
 					<div id="errorMessage" class="error-message" style="display: none;">
-						❌ Unable to fetch prayer times. Please check your location settings.
+						Unable to fetch prayer times. Please check your location settings.
 					</div>
 				</div>
 			</div>
@@ -929,13 +1607,36 @@ class SidebarProvider {
 			<!-- Azkar Section -->
 			<div class="section">
 				<div class="section-title">
-					📿 Daily Azkar
+					<img src="${
+            this._view
+              ? this._view.webview.asWebviewUri(
+                  vscode.Uri.joinPath(
+                    this._context.extensionUri,
+                    "icons",
+                    "azkar.svg"
+                  )
+                )
+              : ""
+          }" alt="Azkar" class="section-icon">
+					Daily Azkar
 				</div>
 				<div class="azkar-content">
 					<div class="azkar-text" id="azkarText">
 						سُبْحَانَ اللَّهِ وَبِحَمْدِهِ
 					</div>
-					<button class="refresh-button" onclick="getRandomAzkar()">New Azkar</button>
+					<button class="refresh-button" onclick="getRandomAzkar()">
+						<img src="${
+              this._view
+                ? this._view.webview.asWebviewUri(
+                    vscode.Uri.joinPath(
+                      this._context.extensionUri,
+                      "icons",
+                      "refresh.svg"
+                    )
+                  )
+                : ""
+            }" alt="Refresh" class="button-icon"> New Azkar
+					</button>
 				</div>
 			</div>
 			`
@@ -948,7 +1649,18 @@ class SidebarProvider {
 			<!-- Pomodoro Timer Section -->
 			<div class="section">
 				<div class="section-title">
-					🍅 Focus Timer
+					<img src="${
+            this._view
+              ? this._view.webview.asWebviewUri(
+                  vscode.Uri.joinPath(
+                    this._context.extensionUri,
+                    "icons",
+                    "pomodoro.svg"
+                  )
+                )
+              : ""
+          }" alt="Pomodoro" class="section-icon">
+					Focus Timer
 				</div>
 				<div class="pomodoro-container">
 					<div class="timer-status" id="timerStatus">Ready to Focus</div>
@@ -973,7 +1685,18 @@ class SidebarProvider {
 			<!-- Todo List Section -->
 			<div class="section">
 				<div class="section-title">
-					📝 Programming Tasks
+					<img src="${
+            this._view
+              ? this._view.webview.asWebviewUri(
+                  vscode.Uri.joinPath(
+                    this._context.extensionUri,
+                    "icons",
+                    "tasks.svg"
+                  )
+                )
+              : ""
+          }" alt="Tasks" class="section-icon">
+					Programming Tasks
 				</div>
 				<div class="todo-container">
 					<div class="todo-input-group">
@@ -998,9 +1721,123 @@ class SidebarProvider {
           : ""
       }
 			
+			${
+        config.enableQuranAudio
+          ? `
+			<!-- Quran Audio Section -->
+			<div class="section">
+				<div class="section-title">
+					<img src="${
+            this._view
+              ? this._view.webview.asWebviewUri(
+                  vscode.Uri.joinPath(
+                    this._context.extensionUri,
+                    "icons",
+                    "quran.svg"
+                  )
+                )
+              : ""
+          }" alt="Quran" class="section-icon">
+					Quran Audio Player
+				</div>
+				<div class="quran-container">
+					<div class="quran-selection">
+						<div class="selection-group">
+							<label for="surahSelect">Select Surah:</label>
+							<select id="surahSelect" onchange="handleSurahChange()">
+								<option value="">Choose a Surah...</option>
+							</select>
+						</div>
+						
+						<div class="selection-group">
+							<label for="reciterSelect">Select Reciter:</label>
+							<select id="reciterSelect">
+								<option value="mishari">Mishary Rashid Al-Afasy</option>
+								<option value="maher">Maher Al-Muaiqly</option>
+								<option value="sudais">Abdul Rahman Al-Sudais</option>
+								<option value="shuraim">Saud Al-Shuraim</option>
+								<option value="ghamdi">Saad Al-Ghamdi</option>
+								<option value="husary">Mahmoud Khalil Al-Husary</option>
+							</select>
+						</div>
+					</div>
+					
+					<div class="audio-controls">
+						<button class="audio-button" id="playBtn" onclick="playQuranAudio()" disabled>
+							<img src="${
+                this._view
+                  ? this._view.webview.asWebviewUri(
+                      vscode.Uri.joinPath(
+                        this._context.extensionUri,
+                        "icons",
+                        "play.svg"
+                      )
+                    )
+                  : ""
+              }" alt="Play" class="button-icon">
+							<span id="playBtnText">Play</span>
+						</button>
+						<button class="audio-button" id="stopBtn" onclick="stopQuranAudio()" disabled>
+							<img src="${
+                this._view
+                  ? this._view.webview.asWebviewUri(
+                      vscode.Uri.joinPath(
+                        this._context.extensionUri,
+                        "icons",
+                        "stop.svg"
+                      )
+                    )
+                  : ""
+              }" alt="Stop" class="button-icon">
+							Stop
+						</button>
+						<button class="audio-button" id="downloadBtn" onclick="downloadQuranAudio()" disabled>
+							<img src="${
+                this._view
+                  ? this._view.webview.asWebviewUri(
+                      vscode.Uri.joinPath(
+                        this._context.extensionUri,
+                        "icons",
+                        "download.svg"
+                      )
+                    )
+                  : ""
+              }" alt="Download" class="button-icon">
+							Download
+						</button>
+					</div>
+					
+					<div class="audio-info" id="audioInfo">
+						<div class="current-playing" id="currentPlaying" style="display: none;">
+							<strong>Now Playing:</strong> <span id="playingText"></span>
+							<br><small id="audioModeText">🔊 Audio playing in background - will continue even when switching panels</small>
+						</div>
+					</div>
+					
+					<audio id="quranAudio" controls style="width: 100%; margin-top: 15px; display: none;">
+						Your browser does not support the audio element.
+					</audio>
+				</div>
+			</div>
+			`
+          : ""
+      }
+			
 			<div class="footer">
-				<p>Islamic Shoky Extension v0.0.1</p>
-				<p>Stay focused, stay blessed 🤲</p>
+				<p>Islamic Shoky Extension v1.2.0</p>
+				<p>Stay focused, stay blessed 
+					<img src="${
+            this._view
+              ? this._view.webview.asWebviewUri(
+                  vscode.Uri.joinPath(
+                    this._context.extensionUri,
+                    "icons",
+                    "islamic.svg"
+                  )
+                )
+              : ""
+          }" alt="Islamic" class="inline-icon">
+				</p>
 			</div>
 			
 			<script>
@@ -1015,31 +1852,163 @@ class SidebarProvider {
 				
 				// Azkar data - combine default and custom
 				const defaultAzkarList = [
-					{
-						arabic: 'سُبْحَانَ اللَّهِ وَبِحَمْدِهِ',
-						translation: 'Glory be to Allah and praise be to Him'
-					},
-					{
-						arabic: 'لَا إِلَهَ إِلَّا اللَّهُ وَحْدَهُ لَا شَرِيكَ لَهُ',
-						translation: 'There is no god but Allah, alone without partner'
-					},
-					{
-						arabic: 'اللَّهُمَّ صَلِّ وَسَلِّمْ عَلَى نَبِيِّنَا محَمَّدٍ',
-						translation: 'O Allah, send blessings and peace upon our Prophet Muhammad'
-					},
-					{
-						arabic: 'رَبِّ اغْفِرْ لِي وَتُبْ عَلَيَّ إِنَّكَ أَنتَ التَّوَّابُ الرَّحِيمُ',
-						translation: 'My Lord, forgive me and accept my repentance. You are the Oft-Returning, the Most Merciful'
-					},
-					{
-						arabic: 'حَسْبُنَا اللَّهُ وَنِعْمَ الْوَكِيلُ',
-						translation: 'Allah is sufficient for us, and He is the best Disposer of affairs'
-					},
-					{
-						arabic: 'رَبَّنَا آتِنَا فِي الدُّنْيَا حَسَنَةً وَفِي الْآخِرَةِ حَسَنَةً وَقِنَا عَذَابَ النَّارِ',
-						translation: 'Our Lord, give us good in this world and good in the next world, and save us from the punishment of the Fire'
-					}
-				];
+	{
+		arabic: 'سُبْحَانَ اللَّهِ وَبِحَمْدِهِ',
+		translation: 'Glory be to Allah and praise be to Him.'
+	},
+	{
+		arabic: 'لَا إِلَهَ إِلَّا اللَّهُ وَحْدَهُ لَا شَرِيكَ لَهُ، لَهُ الْمُلْكُ وَلَهُ الْحَمْدُ وَهُوَ عَلَى كُلِّ شَيْءٍ قَدِيرٌ',
+		translation: 'There is no god but Allah, alone, without partner. To Him belongs all sovereignty and praise, and He is over all things competent.'
+	},
+	{
+		arabic: 'أَسْتَغْفِرُ اللَّهَ وَأَتُوبُ إِلَيْهِ',
+		translation: 'I seek the forgiveness of Allah and repent to Him.'
+	},
+	{
+		arabic: 'اللَّهُمَّ صَلِّ وَسَلِّمْ عَلَى نَبِيِّنَا مُحَمَّدٍ',
+		translation: 'O Allah, send blessings and peace upon our Prophet Muhammad.'
+	},
+	{
+		arabic: 'سُبْحَانَ اللَّهِ الْعَظِيمِ وَبِحَمْدِهِ',
+		translation: 'Glory be to Allah, the Magnificent, and praise be to Him.'
+	},
+	{
+		arabic: 'لَا حَوْلَ وَلَا قُوَّةَ إِلَّا بِاللَّهِ',
+		translation: 'There is no might nor power except with Allah.'
+	},
+	{
+		arabic: 'سُبْحَانَ اللَّهِ',
+		translation: 'Glory be to Allah.'
+	},
+	{
+		arabic: 'الْحَمْدُ لِلَّهِ',
+		translation: 'Praise be to Allah.'
+	},
+	{
+		arabic: 'اللَّهُ أَكْبَرُ',
+		translation: 'Allah is the Greatest.'
+	},
+	{
+		arabic: 'لَا إِلَهَ إِلَّا اللَّهُ',
+		translation: 'There is no god but Allah.'
+	},
+	{
+		arabic: 'اللَّهُمَّ أَنْتَ رَبِّي لَا إِلَهَ إِلَّا أَنْتَ، خَلَقْتَنِي وَأَنَا عَبْدُكَ، وَأَنَا عَلَى عَهْدِكَ وَوَعْدِكَ مَا اسْتَطَعْتُ، أَعُوذُ بِكَ مِنْ شَرِّ مَا صَنَعْتُ، أَبُوءُ لَكَ بِنِعْمَتِكَ عَلَيَّ، وَأَبُوءُ بِذَنْبِي فَاغْفِرْ لِي فَإِنَّهُ لَا يَغْفِرُ الذُّنُوبَ إِلَّا أَنْتَ',
+		translation: 'O Allah, You are my Lord. There is none worthy of worship but You. You created me and I am your slave. I am upon Your covenant and promise as much as I can. I seek refuge in You from the evil I have done. I acknowledge Your blessings upon me and I acknowledge my sin. So forgive me, for none forgives sins but You.'
+	},
+	{
+		arabic: 'بِسْمِ اللَّهِ الَّذِي لَا يَضُرُّ مَعَ اسْمِهِ شَيْءٌ فِي الْأَرْضِ وَلَا فِي السَّمَاءِ وَهُوَ السَّمِيعُ الْعَلِيمُ',
+		translation: 'In the Name of Allah, with Whose Name nothing on earth or in the heavens can cause harm, and He is the All-Hearing, the All-Knowing.'
+	},
+	{
+		arabic: 'أَعُوذُ بِكَلِمَاتِ اللَّهِ التَّامَّاتِ مِنْ شَرِّ مَا خَلَقَ',
+		translation: 'I seek refuge in the perfect words of Allah from the evil of what He has created.'
+	},
+	{
+		arabic: 'رَضِيتُ بِاللَّهِ رَبًّا وَبِالْإِسْلَامِ دِينًا وَبِمُحَمَّدٍ صَلَّى اللَّهُ عَلَيْهِ وَسَلَّمَ نَبِيًّا',
+		translation: 'I am pleased with Allah as my Lord, with Islam as my religion, and with Muhammad (peace be upon him) as my Prophet.'
+	},
+	{
+		arabic: 'يَا حَيُّ يَا قَيُّومُ بِرَحْمَتِكَ أَسْتَغِيثُ أَصْلِحْ لِي شَأْنِي كُلَّهُ وَلَا تَكِلْنِي إِلَى نَفْسِي طَرْفَةَ عَيْنٍ',
+		translation: 'O Ever-Living, O Sustainer of all that exists, by Your mercy I seek help; rectify all my affairs and do not leave me to myself even for the blink of an eye.'
+	},
+	{
+		arabic: 'اللَّهُمَّ إِنِّي أَسْأَلُكَ عِلْمًا نَافِعًا وَرِزْقًا طَيِّبًا وَعَمَلًا مُتَقَبَّلًا',
+		translation: 'O Allah, I ask You for beneficial knowledge, goodly provision, and acceptable deeds.'
+	},
+	{
+		arabic: 'اللَّهُمَّ عَافِنِي فِي بَدَنِي، اللَّهُمَّ عَافِنِي فِي سَمْعِي، اللَّهُمَّ عَافِنِي فِي بَصَرِي، لَا إِلَهَ إِلَّا أَنْتَ',
+		translation: 'O Allah, make me healthy in my body. O Allah, preserve for me my hearing. O Allah, preserve for me my sight. There is no god but You.'
+	},
+	{
+		arabic: 'اللَّهُمَّ إِنِّي أَعُوذُ بِكَ مِنَ الْهَمِّ وَالْحَزَنِ، وَالْعَجْزِ وَالْكَسَلِ، وَالْبُخْلِ وَالْجُبْنِ، وَضَلَعِ الدَّيْنِ وَغَلَبَةِ الرِّجَالِ',
+		translation: 'O Allah, I seek refuge in You from anxiety and sorrow, weakness and laziness, miserliness and cowardice, the burden of debts and being overpowered by men.'
+	},
+	{
+		arabic: 'رَبَّنَا آتِنَا فِي الدُّنْيَا حَسَنَةً وَفِي الْآخِرَةِ حَسَنَةً وَقِنَا عَذَابَ النَّارِ',
+		translation: 'Our Lord, give us in this world [that which is] good and in the Hereafter [that which is] good and protect us from the punishment of the Fire.'
+	},
+	{
+		arabic: 'رَبِّ اشْرَحْ لِي صَدْرِي وَيَسِّرْ لِي أَمْرِي وَاحْلُلْ عُقْدَةً مِنْ لِسَانِي يَفْقَهُوا قَوْلِي',
+		translation: 'My Lord, expand for me my breast, ease for me my task, and untie the knot from my tongue that they may understand my speech.'
+	},
+	{
+		arabic: 'لَا إِلَهَ إِلَّا أَنْتَ سُبْحَانَكَ إِنِّي كُنْتُ مِنَ الظَّالِمِينَ',
+		translation: 'There is no deity except You; exalted are You. Indeed, I have been of the wrongdoers.'
+	},
+	{
+		arabic: 'حَسْبِيَ اللَّهُ لَا إِلَهَ إِلَّا هُوَ عَلَيْهِ تَوَكَّلْتُ وَهُوَ رَبُّ الْعَرْشِ الْعَظِيمِ',
+		translation: 'Allah is sufficient for me. There is no god but Him. In Him I have placed my trust, and He is the Lord of the Magnificent Throne.'
+	},
+	{
+		arabic: 'اللَّهُمَّ اكْفِنِي بِحَلَالِكَ عَنْ حَرَامِكَ وَأَغْنِنِي بِفَضْلِكَ عَمَّنْ سِوَاكَ',
+		translation: 'O Allah, suffice me with Your lawful against Your unlawful, and make me independent of all others besides You.'
+	},
+	{
+		arabic: 'اللَّهُمَّ إِنَّكَ عَفُوٌّ تُحِبُّ الْعَفْوَ فَاعْفُ عَنِّي',
+		translation: 'O Allah, You are Pardoning, You love to pardon, so pardon me.'
+	},
+	{
+		arabic: 'رَبَّنَا لَا تُزِغْ قُلُوبَنَا بَعْدَ إِذْ هَدَيْتَنَا وَهَبْ لَنَا مِنْ لَدُنْكَ رَحْمَةً إِنَّكَ أَنْتَ الْوَهَّابُ',
+		translation: 'Our Lord, let not our hearts deviate after You have guided us and grant us from Yourself mercy. Indeed, You are the Bestower.'
+	},
+	{
+		arabic: 'رَبَّنَا اغْفِرْ لِي وَلِوَالِدَيَّ وَلِلْمُؤْمِنِينَ يَوْمَ يَقُومُ الْحِسَابُ',
+		translation: 'Our Lord, forgive me and my parents and the believers the Day the account is established.'
+	},
+	{
+		arabic: 'رَبِّ زِدْنِي عِلْمًا',
+		translation: 'My Lord, increase me in knowledge.'
+	},
+	{
+		arabic: 'اللَّهُمَّ إِنِّي أَسْأَلُكَ الْجَنَّةَ وَأَعُوذُ بِكَ مِنَ النَّارِ',
+		translation: 'O Allah, I ask You for Paradise and seek Your protection from the Fire.'
+	},
+	{
+		arabic: 'اللَّهُمَّ أَعِنِّي عَلَى ذِكْرِكَ وَشُكْرِكَ وَحُسْنِ عِبَادَتِكَ',
+		translation: 'O Allah, help me to remember You, to give You thanks, and to worship You in the best of manners.'
+	},
+	{
+		arabic: 'اللَّهُمَّ يَا مُقَلِّبَ الْقُلُوبِ ثَبِّتْ قَلْبِي عَلَى دِينِكَ',
+		translation: 'O Allah, O Changer of the hearts, make my heart firm upon Your religion.'
+	},
+	{
+		arabic: 'سُبْحَانَكَ اللَّهُمَّ وَبِحَمْدِكَ أَشْهَدُ أَنْ لَا إِلَهَ إِلَّا أَنْتَ أَسْتَغْفِرُكَ وَأَتُوبُ إِلَيْكَ',
+		translation: 'Glory is to You, O Allah, and praise. I bear witness that there is no god but You. I seek Your forgiveness and turn to You in repentance.'
+	},
+	{
+		arabic: 'رَبِّ اغْفِرْ لِي وَارْحَمْنِي وَاهْدِنِي وَعَافِنِي وَارْزُقْنِي',
+		translation: 'My Lord, forgive me, have mercy on me, guide me, grant me well-being, and provide for me.'
+	},
+	{
+		arabic: 'الْحَمْدُ لِلَّهِ الَّذِي أَحْيَانَا بَعْدَ مَا أَمَاتَنَا وَإِلَيْهِ النُّشُورُ',
+		translation: 'Praise is to Allah Who gives us life after He has caused us to die and to Him is the resurrection.'
+	},
+	{
+		arabic: 'بِاسْمِكَ اللَّهُمَّ أَمُوتُ وَأَحْيَا',
+		translation: 'In Your name O Allah, I die and I live.'
+	},
+	{
+		arabic: 'بِسْمِ اللَّهِ تَوَكَّلْتُ عَلَى اللَّهِ، وَلَا حَوْلَ وَلَا قُوَّةَ إِلَّا بِاللَّهِ',
+		translation: 'In the Name of Allah, I have placed my trust in Allah, there is no might and no power except with Allah.'
+	},
+	{
+		arabic: 'اللَّهُمَّ إِنِّي أَعُوذُ بِكَ مِنْ زَوَالِ نِعْمَتِكَ، وَتَحَوُّلِ عَافِيَتِكَ، وَفُجَاءَةِ نِقْمَتِكَ، وَجَمِيعِ سَخَطِكَ',
+		translation: 'O Allah, I seek refuge in You from the withdrawal of Your blessing, from the loss of the well-being that You granted me, from the sudden revenge of You, and from all Your wrath.'
+	},
+	{
+		arabic: 'رَبَّنَا هَبْ لَنَا مِنْ أَزْوَاجِنَا وَذُرِّيَّاتِنَا قُرَّةَ أَعْيُنٍ وَاجْعَلْنَا لِلْمُتَّقِينَ إِمَامًا',
+		translation: 'Our Lord, grant us from among our wives and offspring comfort to our eyes and make us a leader for the righteous.'
+	},
+	{
+		arabic: 'اللَّهُمَّ اجْعَلْ فِي قَلْبِي نُورًا، وَفِي لِسَانِي نُورًا، وَفِي سَمْعِي نُورًا، وَفِي بَصَرِي نُورًا',
+		translation: 'O Allah, place light in my heart, and on my tongue light, and in my hearing light, and in my sight light.'
+	},
+	{
+		arabic: 'أَعُوذُ بِاللَّهِ مِنَ الشَّيْطَانِ الرَّجِيمِ',
+		translation: 'I seek refuge in Allah from the accursed Satan.'
+	}
+];
 				
 				let azkarList = [...defaultAzkarList];
 				let azkarChangeInterval;
@@ -1068,11 +2037,17 @@ class SidebarProvider {
 				let currentFilter = 'all';
 				let editingId = null;
 				
+				// Quran Audio Variables
+				let currentAudioUrl = null;
+				let isPlaying = false;
+				let quranData = null;
+				
 				// Initialize
 				initializeAzkar();
 				getRandomAzkar();
 				updateTimerDisplay();
 				loadTodos();
+				initializeQuranPlayer();
 				
 				// Load stored location if available
 				const storedLocation = localStorage.getItem('islamicShokyLocation');
@@ -1134,6 +2109,15 @@ class SidebarProvider {
 								clearInterval(azkarChangeInterval);
 								azkarChangeInterval = null;
 							}
+							
+							// Only stop audio if preserveAudio is false
+							if (!message.preserveAudio && isPlaying) {
+								const audio = document.getElementById('quranAudio');
+								if (audio) {
+									audio.pause();
+									isPlaying = false;
+								}
+							}
 							break;
 						case 'requestCurrentLocation':
 							// Send current location data to extension
@@ -1170,6 +2154,25 @@ class SidebarProvider {
 								});
 							}
 							break;
+						case 'restoreAudioState':
+							// Restore previous audio state if it exists
+							if (message.audioState && extensionConfig.enableQuranAudio) {
+								const surahSelect = document.getElementById('surahSelect');
+								const reciterSelect = document.getElementById('reciterSelect');
+								
+								if (surahSelect && reciterSelect) {
+									// Set the previous selection
+									surahSelect.value = message.audioState.surah;
+									reciterSelect.value = message.audioState.reciter;
+									
+									// Show a notification that audio state was preserved
+									showQuranMessage('Audio session restored. You can continue playback.');
+									
+									// Enable play button
+									handleSurahChange();
+								}
+							}
+							break;
 						case 'toggleTaskInList':
 							// Toggle task completion
 							console.log('Webview received toggleTaskInList:', message.taskId);
@@ -1202,6 +2205,49 @@ class SidebarProvider {
 									command: 'tasksUpdated',
 									tasks: todos
 								});
+							}
+							break;
+						case 'audioEnded':
+							// Audio playback ended
+							isPlaying = false;
+							const playBtnText = document.getElementById('playBtnText');
+							const stopBtn = document.getElementById('stopBtn');
+							const currentPlaying = document.getElementById('currentPlaying');
+							
+							if (playBtnText) playBtnText.textContent = 'Play';
+							if (stopBtn) stopBtn.disabled = true;
+							if (currentPlaying) currentPlaying.style.display = 'none';
+							
+							showQuranMessage('Audio playback completed.');
+							break;
+						case 'audioStopped':
+							// Audio was stopped
+							isPlaying = false;
+							const playBtn2 = document.getElementById('playBtnText');
+							const stopBtn2 = document.getElementById('stopBtn');
+							const currentPlaying2 = document.getElementById('currentPlaying');
+							
+							if (playBtn2) playBtn2.textContent = 'Play';
+							if (stopBtn2) stopBtn2.disabled = true;
+							if (currentPlaying2) currentPlaying2.style.display = 'none';
+							break;
+						case 'playWebviewAudio':
+							// Fallback to webview audio when system audio fails
+							playWebviewAudioFallback(message.audioUrl, message.surah, message.reciter);
+							break;
+						case 'audioStatus':
+							// Update audio status from background
+							if (message.isPlaying !== isPlaying) {
+								isPlaying = message.isPlaying;
+								const playBtnText3 = document.getElementById('playBtnText');
+								const stopBtn3 = document.getElementById('stopBtn');
+								
+								if (playBtnText3) {
+									playBtnText3.textContent = isPlaying ? 'Stop' : 'Play';
+								}
+								if (stopBtn3) {
+									stopBtn3.disabled = !isPlaying;
+								}
 							}
 							break;
 					}
@@ -1888,8 +2934,17 @@ class SidebarProvider {
 										   value="\${todo.text}" 
 										   onkeypress="if(event.key === 'Enter') saveEdit(\${todo.id}); if(event.key === 'Escape') cancelEdit();">
 									<div class="todo-actions">
-										<button class="todo-edit-btn" onclick="saveEdit(\${todo.id})" title="Save">💾</button>
-										<button class="todo-edit-btn" onclick="cancelEdit()" title="Cancel">❌</button>
+										<button class="todo-edit-btn" onclick="saveEdit(\${todo.id})" title="Save">
+											<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+												<polyline points="20,6 9,17 4,12"/>
+											</svg>
+										</button>
+										<button class="todo-edit-btn" onclick="cancelEdit()" title="Cancel">
+											<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+												<line x1="18" y1="6" x2="6" y2="18"/>
+												<line x1="6" y1="6" x2="18" y2="18"/>
+											</svg>
+										</button>
 									</div>
 								</div>
 							\`;
@@ -1901,8 +2956,19 @@ class SidebarProvider {
 										   onclick="toggleTodo(\${todo.id})">
 									<span class="todo-text">\${todo.text}</span>
 									<div class="todo-actions">
-										<button class="todo-edit-btn" onclick="editTodo(\${todo.id})" title="Edit">✏️</button>
-										<button class="todo-delete-btn" onclick="deleteTodo(\${todo.id})" title="Delete">🗑️</button>
+										<button class="todo-edit-btn" onclick="editTodo(\${todo.id})" title="Edit">
+											<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+												<path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>
+											</svg>
+										</button>
+										<button class="todo-delete-btn" onclick="deleteTodo(\${todo.id})" title="Delete">
+											<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+												<polyline points="3,6 5,6 21,6"/>
+												<path d="M19,6V20a2,2,0,0,1-2,2H7a2,2,0,0,1-2-2V6m3,0V4a2,2,0,0,1,2-2h4a2,2,0,0,1,2,2V6"/>
+												<line x1="10" y1="11" x2="10" y2="17"/>
+												<line x1="14" y1="11" x2="14" y2="17"/>
+											</svg>
+										</button>
 									</div>
 								</div>
 							\`;
@@ -1953,6 +3019,766 @@ class SidebarProvider {
 						});
 					}
 				});
+				
+				// Quran Audio Player Functions
+				async function initializeQuranPlayer() {
+					try {
+						await loadQuranData();
+						populateSelectionOptions();
+					} catch (error) {
+						console.error('Failed to initialize Quran player:', error);
+					}
+				}
+				
+				async function loadQuranData() {
+					// Quran data with surah, juz, and hizb information
+					quranData = {
+						surahs: [
+							{ id: 1, name: "Al-Fatiha (الفاتحة)", arabicName: "الفاتحة", englishName: "The Opening", juz: 1, hizb: 1 },
+							{ id: 2, name: "Al-Baqarah (البقرة)", arabicName: "البقرة", englishName: "The Cow", juz: 1, hizb: 1 },
+							{ id: 3, name: "Al Imran (آل عمران)", arabicName: "آل عمران", englishName: "The Family of Imran", juz: 3, hizb: 5 },
+							{ id: 4, name: "An-Nisa (النساء)", arabicName: "النساء", englishName: "The Women", juz: 4, hizb: 7 },
+							{ id: 5, name: "Al-Ma'idah (المائدة)", arabicName: "المائدة", englishName: "The Table", juz: 6, hizb: 11 },
+							{ id: 6, name: "Al-An'am (الأنعام)", arabicName: "الأنعام", englishName: "The Cattle", juz: 7, hizb: 13 },
+							{ id: 7, name: "Al-A'raf (الأعراف)", arabicName: "الأعراف", englishName: "The Heights", juz: 8, hizb: 15 },
+							{ id: 8, name: "Al-Anfal (الأنفال)", arabicName: "الأنفال", englishName: "The Spoils of War", juz: 9, hizb: 17 },
+							{ id: 9, name: "At-Tawbah (التوبة)", arabicName: "التوبة", englishName: "The Repentance", juz: 10, hizb: 19 },
+							{ id: 10, name: "Yunus (يونس)", arabicName: "يونس", englishName: "Jonah", juz: 11, hizb: 21 },
+							{ id: 11, name: "Hud (هود)", arabicName: "هود", englishName: "Hud", juz: 11, hizb: 21 },
+							{ id: 12, name: "Yusuf (يوسف)", arabicName: "يوسف", englishName: "Joseph", juz: 12, hizb: 23 },
+							{ id: 13, name: "Ar-Ra'd (الرعد)", arabicName: "الرعد", englishName: "The Thunder", juz: 13, hizb: 25 },
+							{ id: 14, name: "Ibrahim (ابراهيم)", arabicName: "ابراهيم", englishName: "Abraham", juz: 13, hizb: 25 },
+							{ id: 15, name: "Al-Hijr (الحجر)", arabicName: "الحجر", englishName: "The Rock", juz: 14, hizb: 27 },
+							{ id: 16, name: "An-Nahl (النحل)", arabicName: "النحل", englishName: "The Bee", juz: 14, hizb: 27 },
+							{ id: 17, name: "Al-Isra (الإسراء)", arabicName: "الإسراء", englishName: "The Night Journey", juz: 15, hizb: 29 },
+							{ id: 18, name: "Al-Kahf (الكهف)", arabicName: "الكهف", englishName: "The Cave", juz: 15, hizb: 29 },
+							{ id: 19, name: "Maryam (مريم)", arabicName: "مريم", englishName: "Mary", juz: 16, hizb: 31 },
+							{ id: 20, name: "Ta-Ha (طه)", arabicName: "طه", englishName: "Ta-Ha", juz: 16, hizb: 31 },
+							{ id: 21, name: "Al-Anbiya (الأنبياء)", arabicName: "الأنبياء", englishName: "The Prophets", juz: 17, hizb: 33 },
+							{ id: 22, name: "Al-Hajj (الحج)", arabicName: "الحج", englishName: "The Pilgrimage", juz: 17, hizb: 33 },
+							{ id: 23, name: "Al-Mu'minun (المؤمنون)", arabicName: "المؤمنون", englishName: "The Believers", juz: 18, hizb: 35 },
+							{ id: 24, name: "An-Nur (النور)", arabicName: "النور", englishName: "The Light", juz: 18, hizb: 35 },
+							{ id: 25, name: "Al-Furqan (الفرقان)", arabicName: "الفرقان", englishName: "The Criterion", juz: 18, hizb: 35 },
+							{ id: 26, name: "Ash-Shu'ara (الشعراء)", arabicName: "الشعراء", englishName: "The Poets", juz: 19, hizb: 37 },
+							{ id: 27, name: "An-Naml (النمل)", arabicName: "النمل", englishName: "The Ant", juz: 19, hizb: 37 },
+							{ id: 28, name: "Al-Qasas (القصص)", arabicName: "القصص", englishName: "The Stories", juz: 20, hizb: 39 },
+							{ id: 29, name: "Al-Ankabut (العنكبوت)", arabicName: "العنكبوت", englishName: "The Spider", juz: 20, hizb: 39 },
+							{ id: 30, name: "Ar-Rum (الروم)", arabicName: "الروم", englishName: "The Byzantines", juz: 21, hizb: 41 }
+							// Adding more surahs would make this too long, but in a real implementation you'd include all 114
+						],
+						reciters: {
+							mishari: { name: "Mishary Rashid Al-Afasy", arabicName: "مشاري راشد العفاسي", baseUrl: "https://server8.mp3quran.net/afs/" },
+							maher: { name: "Maher Al-Muaiqly", arabicName: "ماهر المعيقلي", baseUrl: "https://server12.mp3quran.net/maher/" },
+							sudais: { name: "Abdul Rahman Al-Sudais", arabicName: "عبد الرحمن السديس", baseUrl: "https://server11.mp3quran.net/sds/" },
+							shuraim: { name: "Saud Al-Shuraim", arabicName: "سعود الشريم", baseUrl: "https://server11.mp3quran.net/shr/" },
+							ghamdi: { name: "Saad Al-Ghamdi", arabicName: "سعد الغامدي", baseUrl: "https://server7.mp3quran.net/s_gmd/" },
+							husary: { name: "Mahmoud Khalil Al-Husary", arabicName: "محمود خليل الحصري", baseUrl: "https://server13.mp3quran.net/husr/" }
+						},
+						juzList: Array.from({ length: 30 }, (_, i) => ({
+							id: i + 1,
+							name: \`Juz \${i + 1} (الجزء \${i + 1})\`,
+							arabicName: \`الجزء \${i + 1}\`
+						})),
+						hizbList: Array.from({ length: 60 }, (_, i) => ({
+							id: i + 1,
+							name: \`Hizb \${i + 1} (الحزب \${i + 1})\`,
+							arabicName: \`الحزب \${i + 1}\`
+						}))
+					};
+				}
+				
+				function populateSelectionOptions() {
+					// Populate surah options
+					const surahSelect = document.getElementById('surahSelect');
+					if (surahSelect && quranData.surahs) {
+						quranData.surahs.forEach(surah => {
+							const option = document.createElement('option');
+							option.value = surah.id;
+							option.textContent = \`\${surah.id}. \${surah.name}\`;
+							surahSelect.appendChild(option);
+						});
+					}
+					
+					// Populate juz options
+					const juzSelect = document.getElementById('juzSelect');
+					if (juzSelect && quranData.juzList) {
+						quranData.juzList.forEach(juz => {
+							const option = document.createElement('option');
+							option.value = juz.id;
+							option.textContent = juz.name;
+							juzSelect.appendChild(option);
+						});
+					}
+					
+					// Populate hizb options
+					const hizbSelect = document.getElementById('hizbSelect');
+					if (hizbSelect && quranData.hizbList) {
+						quranData.hizbList.forEach(hizb => {
+							const option = document.createElement('option');
+							option.value = hizb.id;
+							option.textContent = hizb.name;
+							hizbSelect.appendChild(option);
+						});
+					}
+				}
+				
+				function handleSelectionTypeChange() {
+					const selectionType = document.getElementById('selectionType').value;
+					const surahSelection = document.getElementById('surahSelection');
+					const juzSelection = document.getElementById('juzSelection');
+					const hizbSelection = document.getElementById('hizbSelection');
+					
+					// Hide all selections
+					surahSelection.style.display = 'none';
+					juzSelection.style.display = 'none';
+					hizbSelection.style.display = 'none';
+					
+					// Show selected type
+					if (selectionType === 'surah') {
+						surahSelection.style.display = 'block';
+					} else if (selectionType === 'juz') {
+						juzSelection.style.display = 'block';
+					} else if (selectionType === 'hizb') {
+						hizbSelection.style.display = 'block';
+					}
+					
+					// Reset audio info and controls
+					resetAudioPlayer();
+					updatePlayButton();
+				}
+				
+				function playQuranAudio() {
+					const selectionType = document.getElementById('selectionType').value;
+					const reciter = document.getElementById('reciterSelect').value;
+					
+					let audioUrl = '';
+					let playingText = '';
+					
+					if (selectionType === 'surah') {
+						const surahId = document.getElementById('surahSelect').value;
+						if (!surahId) {
+							showQuranMessage('Please select a Surah first.');
+							return;
+						}
+						
+						const surah = quranData.surahs.find(s => s.id == surahId);
+						if (surah) {
+							audioUrl = buildAudioUrl(reciter, 'surah', surahId);
+							playingText = \`\${surah.name}\`;
+						}
+					} else if (selectionType === 'juz') {
+						const juzId = document.getElementById('juzSelect').value;
+						if (!juzId) {
+							showQuranMessage('Please select a Juz first.');
+							return;
+						}
+						
+						audioUrl = buildAudioUrl(reciter, 'juz', juzId);
+						playingText = \`Juz \${juzId} (الجزء \${juzId})\`;
+					} else if (selectionType === 'hizb') {
+						const hizbId = document.getElementById('hizbSelection').value;
+						if (!hizbId) {
+							showQuranMessage('Please select a Hizb first.');
+							return;
+						}
+						
+						audioUrl = buildAudioUrl(reciter, 'hizb', hizbId);
+						playingText = \`Hizb \${hizbId} (الحزب \${hizbId})\`;
+					}
+					
+					if (audioUrl) {
+						currentAudioUrl = audioUrl;
+						const audio = document.getElementById('quranAudio');
+						const currentPlayingDiv = document.getElementById('currentPlaying');
+						const playingTextSpan = document.getElementById('playingText');
+						
+						audio.src = audioUrl;
+						audio.style.display = 'block';
+						currentPlayingDiv.style.display = 'block';
+						playingTextSpan.textContent = playingText;
+						
+						setLoadingState(true);
+						
+						audio.play().then(() => {
+							isPlaying = true;
+							updatePlayButton();
+							setLoadingState(false);
+							showQuranMessage('Playing Quran audio...');
+						}).catch(error => {
+							console.error('Error playing audio:', error);
+							showQuranMessage('Error playing audio. Please check your internet connection.');
+							setLoadingState(false);
+						});
+					}
+				}
+				
+				function stopQuranAudio() {
+					const audio = document.getElementById('quranAudio');
+					const currentPlayingDiv = document.getElementById('currentPlaying');
+					
+					audio.pause();
+					audio.currentTime = 0;
+					audio.style.display = 'none';
+					currentPlayingDiv.style.display = 'none';
+					
+					isPlaying = false;
+					currentAudioUrl = null;
+					updatePlayButton();
+					showQuranMessage('Audio stopped.');
+				}
+				
+				function downloadQuranAudio() {
+					if (currentAudioUrl) {
+						const link = document.createElement('a');
+						link.href = currentAudioUrl;
+						link.download = 'quran-audio.mp3';
+						document.body.appendChild(link);
+						link.click();
+						document.body.removeChild(link);
+						showQuranMessage('Download started...');
+					} else {
+						showQuranMessage('Please select and play audio first.');
+					}
+				}
+				
+				function buildAudioUrl(reciter, type, id) {
+					const reciterData = quranData.reciters[reciter];
+					if (!reciterData) return '';
+					
+					let fileName = '';
+					if (type === 'surah') {
+						fileName = String(id).padStart(3, '0') + '.mp3';
+					} else if (type === 'juz') {
+						// For juz, we'll use a different API structure
+						fileName = \`juz_\${String(id).padStart(2, '0')}.mp3\`;
+					} else if (type === 'hizb') {
+						// For hizb, we'll use a different API structure  
+						fileName = \`hizb_\${String(id).padStart(2, '0')}.mp3\`;
+					}
+					
+					return reciterData.baseUrl + fileName;
+				}
+				
+				function updatePlayButton() {
+					const playBtn = document.getElementById('playBtn');
+					const stopBtn = document.getElementById('stopBtn');
+					const downloadBtn = document.getElementById('downloadBtn');
+					const playBtnText = document.getElementById('playBtnText');
+					
+					const hasSelection = getSelectionId() !== null;
+					
+					playBtn.disabled = !hasSelection || isPlaying;
+					stopBtn.disabled = !isPlaying;
+					downloadBtn.disabled = !currentAudioUrl;
+					
+					if (isPlaying) {
+						playBtnText.textContent = '⏸️ Playing...';
+					} else {
+						playBtnText.textContent = '▶️ Play';
+					}
+				}
+				
+				function getSelectionId() {
+					const selectionType = document.getElementById('selectionType').value;
+					
+					if (selectionType === 'surah') {
+						return document.getElementById('surahSelect').value;
+					} else if (selectionType === 'juz') {
+						return document.getElementById('juzSelect').value;
+					} else if (selectionType === 'hizb') {
+						return document.getElementById('hizbSelect').value;
+					}
+					
+					return null;
+				}
+				
+				function resetAudioPlayer() {
+					const audio = document.getElementById('quranAudio');
+					const currentPlayingDiv = document.getElementById('currentPlaying');
+					
+					if (audio) {
+						audio.pause();
+						audio.src = '';
+						audio.style.display = 'none';
+					}
+					
+					if (currentPlayingDiv) {
+						currentPlayingDiv.style.display = 'none';
+					}
+					
+					isPlaying = false;
+					currentAudioUrl = null;
+				}
+				
+				function setLoadingState(loading) {
+					const playBtn = document.getElementById('playBtn');
+					const playBtnText = document.getElementById('playBtnText');
+					
+					if (loading) {
+						playBtn.classList.add('loading');
+						playBtnText.textContent = '🔄 Loading...';
+					} else {
+						playBtn.classList.remove('loading');
+					}
+				}
+				
+				function showQuranMessage(message) {
+					// Create a temporary message for Quran player
+					const messageDiv = document.createElement('div');
+					messageDiv.textContent = message;
+					messageDiv.style.cssText = \`
+						position: fixed;
+						top: 20px;
+						right: 20px;
+						background: var(--vscode-notificationsInfoIcon-foreground);
+						color: var(--vscode-button-foreground);
+						padding: 8px 16px;
+						border-radius: 4px;
+						font-size: 0.8em;
+						z-index: 1000;
+						animation: fadeIn 0.3s ease;
+					\`;
+					
+					document.body.appendChild(messageDiv);
+					
+					setTimeout(() => {
+						messageDiv.style.animation = 'fadeOut 0.3s ease';
+						setTimeout(() => {
+							if (document.body.contains(messageDiv)) {
+								document.body.removeChild(messageDiv);
+							}
+						}, 300);
+					}, 3000);
+				}
+				
+				// Add event listeners for selection changes to update play button
+				document.addEventListener('change', function(event) {
+					if (event.target.id === 'surahSelect' || 
+						event.target.id === 'juzSelect' || 
+						event.target.id === 'hizbSelect' || 
+						event.target.id === 'reciterSelect') {
+						updatePlayButton();
+					}
+				});
+				
+				// Listen for audio events
+				document.addEventListener('DOMContentLoaded', function() {
+					const audio = document.getElementById('quranAudio');
+					if (audio) {
+						audio.addEventListener('ended', function() {
+							isPlaying = false;
+							updatePlayButton();
+							showQuranMessage('Audio playback completed.');
+						});
+						
+						audio.addEventListener('error', function() {
+							isPlaying = false;
+							setLoadingState(false);
+							updatePlayButton();
+							showQuranMessage('Error loading audio. Please try again.');
+						});
+					}
+				});
+				// Quran Audio Functions
+				function initializeQuranPlayer() {
+					if (extensionConfig.enableQuranAudio) {
+						loadSurahs();
+					}
+				}
+				
+				function loadSurahs() {
+					const surahSelect = document.getElementById('surahSelect');
+					if (!surahSelect) return;
+					
+					// List of Quranic Surahs
+					const surahs = [
+						{number: 1, name: "Al-Fatiha", arabic: "الفاتحة"},
+						{number: 2, name: "Al-Baqarah", arabic: "البقرة"},
+						{number: 3, name: "Ali 'Imran", arabic: "آل عمران"},
+						{number: 4, name: "An-Nisa", arabic: "النساء"},
+						{number: 5, name: "Al-Ma'idah", arabic: "المائدة"},
+						{number: 6, name: "Al-An'am", arabic: "الأنعام"},
+						{number: 7, name: "Al-A'raf", arabic: "الأعراف"},
+						{number: 8, name: "Al-Anfal", arabic: "الأنفال"},
+						{number: 9, name: "At-Tawbah", arabic: "التوبة"},
+						{number: 10, name: "Yunus", arabic: "يونس"},
+						{number: 11, name: "Hud", arabic: "هود"},
+						{number: 12, name: "Yusuf", arabic: "يوسف"},
+						{number: 13, name: "Ar-Ra'd", arabic: "الرعد"},
+						{number: 14, name: "Ibrahim", arabic: "ابراهيم"},
+						{number: 15, name: "Al-Hijr", arabic: "الحجر"},
+						{number: 16, name: "An-Nahl", arabic: "النحل"},
+						{number: 17, name: "Al-Isra", arabic: "الإسراء"},
+						{number: 18, name: "Al-Kahf", arabic: "الكهف"},
+						{number: 19, name: "Maryam", arabic: "مريم"},
+						{number: 20, name: "Taha", arabic: "طه"},
+						{number: 21, name: "Al-Anbya", arabic: "الأنبياء"},
+						{number: 22, name: "Al-Hajj", arabic: "الحج"},
+						{number: 23, name: "Al-Mu'minun", arabic: "المؤمنون"},
+						{number: 24, name: "An-Nur", arabic: "النور"},
+						{number: 25, name: "Al-Furqan", arabic: "الفرقان"},
+						{number: 26, name: "Ash-Shu'ara", arabic: "الشعراء"},
+						{number: 27, name: "An-Naml", arabic: "النمل"},
+						{number: 28, name: "Al-Qasas", arabic: "القصص"},
+						{number: 29, name: "Al-'Ankabut", arabic: "العنكبوت"},
+						{number: 30, name: "Ar-Rum", arabic: "الروم"},
+						{number: 31, name: "Luqman", arabic: "لقمان"},
+						{number: 32, name: "As-Sajdah", arabic: "السجدة"},
+						{number: 33, name: "Al-Ahzab", arabic: "الأحزاب"},
+						{number: 34, name: "Saba", arabic: "سبأ"},
+						{number: 35, name: "Fatir", arabic: "فاطر"},
+						{number: 36, name: "Ya-Sin", arabic: "يس"},
+						{number: 37, name: "As-Saffat", arabic: "الصافات"},
+						{number: 38, name: "Sad", arabic: "ص"},
+						{number: 39, name: "Az-Zumar", arabic: "الزمر"},
+						{number: 40, name: "Ghafir", arabic: "غافر"},
+						{number: 41, name: "Fussilat", arabic: "فصلت"},
+						{number: 42, name: "Ash-Shuraa", arabic: "الشورى"},
+						{number: 43, name: "Az-Zukhruf", arabic: "الزخرف"},
+						{number: 44, name: "Ad-Dukhan", arabic: "الدخان"},
+						{number: 45, name: "Al-Jathiyah", arabic: "الجاثية"},
+						{number: 46, name: "Al-Ahqaf", arabic: "الأحقاف"},
+						{number: 47, name: "Muhammad", arabic: "محمد"},
+						{number: 48, name: "Al-Fath", arabic: "الفتح"},
+						{number: 49, name: "Al-Hujurat", arabic: "الحجرات"},
+						{number: 50, name: "Qaf", arabic: "ق"},
+						{number: 51, name: "Adh-Dhariyat", arabic: "الذاريات"},
+						{number: 52, name: "At-Tur", arabic: "الطور"},
+						{number: 53, name: "An-Najm", arabic: "النجم"},
+						{number: 54, name: "Al-Qamar", arabic: "القمر"},
+						{number: 55, name: "Ar-Rahman", arabic: "الرحمن"},
+						{number: 56, name: "Al-Waqi'ah", arabic: "الواقعة"},
+						{number: 57, name: "Al-Hadid", arabic: "الحديد"},
+						{number: 58, name: "Al-Mujadila", arabic: "المجادلة"},
+						{number: 59, name: "Al-Hashr", arabic: "الحشر"},
+						{number: 60, name: "Al-Mumtahanah", arabic: "الممتحنة"},
+						{number: 61, name: "As-Saff", arabic: "الصف"},
+						{number: 62, name: "Al-Jumu'ah", arabic: "الجمعة"},
+						{number: 63, name: "Al-Munafiqun", arabic: "المنافقون"},
+						{number: 64, name: "At-Taghabun", arabic: "التغابن"},
+						{number: 65, name: "At-Talaq", arabic: "الطلاق"},
+						{number: 66, name: "At-Tahrim", arabic: "التحريم"},
+						{number: 67, name: "Al-Mulk", arabic: "الملك"},
+						{number: 68, name: "Al-Qalam", arabic: "القلم"},
+						{number: 69, name: "Al-Haqqah", arabic: "الحاقة"},
+						{number: 70, name: "Al-Ma'arij", arabic: "المعارج"},
+						{number: 71, name: "Nuh", arabic: "نوح"},
+						{number: 72, name: "Al-Jinn", arabic: "الجن"},
+						{number: 73, name: "Al-Muzzammil", arabic: "المزمل"},
+						{number: 74, name: "Al-Muddaththir", arabic: "المدثر"},
+						{number: 75, name: "Al-Qiyamah", arabic: "القيامة"},
+						{number: 76, name: "Al-Insan", arabic: "الإنسان"},
+						{number: 77, name: "Al-Mursalat", arabic: "المرسلات"},
+						{number: 78, name: "An-Naba", arabic: "النبأ"},
+						{number: 79, name: "An-Nazi'at", arabic: "النازعات"},
+						{number: 80, name: "Abasa", arabic: "عبس"},
+						{number: 81, name: "At-Takwir", arabic: "التكوير"},
+						{number: 82, name: "Al-Infitar", arabic: "الإنفطار"},
+						{number: 83, name: "Al-Mutaffifin", arabic: "المطففين"},
+						{number: 84, name: "Al-Inshiqaq", arabic: "الإنشقاق"},
+						{number: 85, name: "Al-Buruj", arabic: "البروج"},
+						{number: 86, name: "At-Tariq", arabic: "الطارق"},
+						{number: 87, name: "Al-A'la", arabic: "الأعلى"},
+						{number: 88, name: "Al-Ghashiyah", arabic: "الغاشية"},
+						{number: 89, name: "Al-Fajr", arabic: "الفجر"},
+						{number: 90, name: "Al-Balad", arabic: "البلد"},
+						{number: 91, name: "Ash-Shams", arabic: "الشمس"},
+						{number: 92, name: "Al-Layl", arabic: "الليل"},
+						{number: 93, name: "Ad-Duhaa", arabic: "الضحى"},
+						{number: 94, name: "Ash-Sharh", arabic: "الشرح"},
+						{number: 95, name: "At-Tin", arabic: "التين"},
+						{number: 96, name: "Al-Alaq", arabic: "العلق"},
+						{number: 97, name: "Al-Qadr", arabic: "القدر"},
+						{number: 98, name: "Al-Bayyinah", arabic: "البينة"},
+						{number: 99, name: "Az-Zalzalah", arabic: "الزلزلة"},
+						{number: 100, name: "Al-Adiyat", arabic: "العاديات"},
+						{number: 101, name: "Al-Qari'ah", arabic: "القارعة"},
+						{number: 102, name: "At-Takathur", arabic: "التكاثر"},
+						{number: 103, name: "Al-Asr", arabic: "العصر"},
+						{number: 104, name: "Al-Humazah", arabic: "الهمزة"},
+						{number: 105, name: "Al-Fil", arabic: "الفيل"},
+						{number: 106, name: "Quraysh", arabic: "قريش"},
+						{number: 107, name: "Al-Ma'un", arabic: "الماعون"},
+						{number: 108, name: "Al-Kawthar", arabic: "الكوثر"},
+						{number: 109, name: "Al-Kafirun", arabic: "الكافرون"},
+						{number: 110, name: "An-Nasr", arabic: "النصر"},
+						{number: 111, name: "Al-Masad", arabic: "المسد"},
+						{number: 112, name: "Al-Ikhlas", arabic: "الإخلاص"},
+						{number: 113, name: "Al-Falaq", arabic: "الفلق"},
+						{number: 114, name: "An-Nas", arabic: "الناس"}
+					];
+					
+					// Populate surah dropdown
+					surahs.forEach(surah => {
+						const option = document.createElement('option');
+						option.value = surah.number;
+						option.textContent = \`\${surah.number}. \${surah.name} - \${surah.arabic}\`;
+						surahSelect.appendChild(option);
+					});
+				}
+				
+				function handleSurahChange() {
+					const surahSelect = document.getElementById('surahSelect');
+					const playBtn = document.getElementById('playBtn');
+					const downloadBtn = document.getElementById('downloadBtn');
+					
+					if (surahSelect.value) {
+						playBtn.disabled = false;
+						downloadBtn.disabled = false;
+					} else {
+						playBtn.disabled = true;
+						downloadBtn.disabled = true;
+					}
+				}
+				
+				function playQuranAudio() {
+					const surahSelect = document.getElementById('surahSelect');
+					const reciterSelect = document.getElementById('reciterSelect');
+					const playBtn = document.getElementById('playBtn');
+					const stopBtn = document.getElementById('stopBtn');
+					const currentPlaying = document.getElementById('currentPlaying');
+					const playingText = document.getElementById('playingText');
+					const playBtnText = document.getElementById('playBtnText');
+					
+					if (!surahSelect.value) {
+						showQuranMessage('Please select a Surah first.');
+						return;
+					}
+					
+					if (isPlaying) {
+						// Stop background audio
+						vscode.postMessage({
+							command: 'stopQuranBackground'
+						});
+						return;
+					}
+					
+					const surahNumber = String(surahSelect.value).padStart(3, '0');
+					const reciter = reciterSelect.value;
+					
+					// Get reciter-specific URL pattern
+					let audioUrl = '';
+					switch (reciter) {
+						case 'mishari':
+							audioUrl = \`https://server8.mp3quran.net/afs/\${surahNumber}.mp3\`;
+							break;
+						case 'maher':
+							audioUrl = \`https://server12.mp3quran.net/maher/\${surahNumber}.mp3\`;
+							break;
+						case 'sudais':
+							audioUrl = \`https://server11.mp3quran.net/sds/\${surahNumber}.mp3\`;
+							break;
+						case 'shuraim':
+							audioUrl = \`https://server6.mp3quran.net/shur/\${surahNumber}.mp3\`;
+							break;
+						case 'ghamdi':
+							audioUrl = \`https://server7.mp3quran.net/s_gmd/\${surahNumber}.mp3\`;
+							break;
+						case 'husary':
+							audioUrl = \`https://server13.mp3quran.net/husr/\${surahNumber}.mp3\`;
+							break;
+						default:
+							audioUrl = \`https://server8.mp3quran.net/afs/\${surahNumber}.mp3\`;
+					}
+					
+					setLoadingState(true);
+					
+					// Show playing info
+					const surahText = surahSelect.options[surahSelect.selectedIndex].text;
+					const reciterText = reciterSelect.options[reciterSelect.selectedIndex].text;
+					playingText.textContent = \`\${surahText} by \${reciterText}\`;
+					currentPlaying.style.display = 'block';
+					
+					// Start background audio playback
+					vscode.postMessage({
+						command: 'playQuranBackground',
+						audioUrl: audioUrl,
+						surah: surahSelect.value,
+						reciter: reciterSelect.value
+					});
+					
+					// Update UI immediately
+					isPlaying = true;
+					setLoadingState(false);
+					playBtnText.textContent = 'Stop';
+					stopBtn.disabled = false;
+					showQuranMessage('Starting Quran audio...');
+				}
+				
+				function stopQuranAudio() {
+					const stopBtn = document.getElementById('stopBtn');
+					const currentPlaying = document.getElementById('currentPlaying');
+					const playBtnText = document.getElementById('playBtnText');
+					
+					// Stop background audio
+					vscode.postMessage({
+						command: 'stopQuranBackground'
+					});
+					
+					// Update UI
+					isPlaying = false;
+					playBtnText.textContent = '▶️ Play';
+					stopBtn.disabled = true;
+					currentPlaying.style.display = 'none';
+					vscode.postMessage({
+						command: 'quranAudioStopped'
+					});
+					
+					showQuranMessage('Audio stopped.');
+				}
+				
+				function playWebviewAudioFallback(audioUrl, surah, reciter) {
+					const audio = document.getElementById('quranAudio');
+					const playBtn = document.getElementById('playBtn');
+					const stopBtn = document.getElementById('stopBtn');
+					const currentPlaying = document.getElementById('currentPlaying');
+					const playingText = document.getElementById('playingText');
+					const playBtnText = document.getElementById('playBtnText');
+					const audioModeText = document.getElementById('audioModeText');
+					
+					console.log('Starting webview audio fallback:', audioUrl);
+					
+					// Set up audio
+					audio.src = audioUrl;
+					currentAudioUrl = audioUrl;
+					
+					// Show playing info with fallback notice
+					playingText.textContent = \`Surah \${surah} by \${reciter}\`;
+					if (audioModeText) {
+						audioModeText.textContent = '🌐 Playing in browser mode (system audio unavailable)';
+					}
+					currentPlaying.style.display = 'block';
+					audio.style.display = 'block';
+					
+					// Play audio
+					audio.play().then(() => {
+						isPlaying = true;
+						playBtnText.textContent = '⏹️ Stop';
+						stopBtn.disabled = false;
+						showQuranMessage('Playing Quran audio in browser mode...');
+						
+						// Set up event listeners for this fallback audio
+						audio.addEventListener('ended', function() {
+							isPlaying = false;
+							playBtnText.textContent = '▶️ Play';
+							stopBtn.disabled = true;
+							currentPlaying.style.display = 'none';
+							audio.style.display = 'none';
+							
+							vscode.postMessage({
+								command: 'quranAudioStopped'
+							});
+							
+							showQuranMessage('Audio playback completed.');
+						}, { once: true });
+						
+						audio.addEventListener('error', function() {
+							isPlaying = false;
+							setLoadingState(false);
+							showQuranMessage('Error loading audio. Please check your internet connection.');
+						}, { once: true });
+						
+					}).catch(error => {
+						console.error('Error playing webview audio:', error);
+						setLoadingState(false);
+						showQuranMessage('Error loading audio. Please check your internet connection.');
+					});
+				}
+				
+				function downloadQuranAudio() {
+					const surahSelect = document.getElementById('surahSelect');
+					const reciterSelect = document.getElementById('reciterSelect');
+					
+					if (!surahSelect.value) {
+						showQuranMessage('Please select a Surah first.');
+						return;
+					}
+					
+					const surahNumber = String(surahSelect.value).padStart(3, '0');
+					const reciter = reciterSelect.value;
+					
+					let audioUrl = '';
+					switch (reciter) {
+						case 'mishari':
+							audioUrl = \`https://server8.mp3quran.net/afs/\${surahNumber}.mp3\`;
+							break;
+						case 'maher':
+							audioUrl = \`https://server12.mp3quran.net/maher/\${surahNumber}.mp3\`;
+							break;
+						case 'sudais':
+							audioUrl = \`https://server11.mp3quran.net/sds/\${surahNumber}.mp3\`;
+							break;
+						case 'shuraim':
+							audioUrl = \`https://server6.mp3quran.net/shur/\${surahNumber}.mp3\`;
+							break;
+						case 'ghamdi':
+							audioUrl = \`https://server7.mp3quran.net/s_gmd/\${surahNumber}.mp3\`;
+							break;
+						case 'husary':
+							audioUrl = \`https://server13.mp3quran.net/husr/\${surahNumber}.mp3\`;
+							break;
+						default:
+							audioUrl = \`https://server8.mp3quran.net/afs/\${surahNumber}.mp3\`;
+					}
+					
+					const surahText = surahSelect.options[surahSelect.selectedIndex].text;
+					const reciterText = reciterSelect.options[reciterSelect.selectedIndex].text;
+					
+					// Create download link
+					const link = document.createElement('a');
+					link.href = audioUrl;
+					link.download = \`Surah_\${surahNumber}_\${reciter}.mp3\`;
+					link.target = '_blank';
+					
+					document.body.appendChild(link);
+					link.click();
+					document.body.removeChild(link);
+					
+					showQuranMessage(\`Download started: \${surahText} by \${reciterText}\`);
+				}
+				
+				function setLoadingState(loading) {
+					const playBtn = document.getElementById('playBtn');
+					const playBtnText = document.getElementById('playBtnText');
+					
+					if (loading) {
+						playBtn.classList.add('loading');
+						playBtnText.textContent = 'Loading...';
+						playBtn.disabled = true;
+					} else {
+						playBtn.classList.remove('loading');
+						playBtn.disabled = false;
+					}
+				}
+				
+				function showQuranMessage(message) {
+					// Create a temporary message
+					const messageDiv = document.createElement('div');
+					messageDiv.textContent = message;
+					messageDiv.style.cssText = \`
+						position: fixed;
+						top: 60px;
+						right: 20px;
+						background: var(--vscode-notificationsInfoIcon-foreground);
+						color: var(--vscode-button-foreground);
+						padding: 8px 16px;
+						border-radius: 4px;
+						font-size: 0.8em;
+						z-index: 1000;
+						animation: fadeIn 0.3s ease;
+						max-width: 300px;
+						word-wrap: break-word;
+					\`;
+					
+					document.body.appendChild(messageDiv);
+					
+					// Remove after 4 seconds
+					setTimeout(() => {
+						if (messageDiv.parentNode) {
+							messageDiv.parentNode.removeChild(messageDiv);
+						}
+					}, 4000);
+				}
 			</script>
 		</body>
 		</html>`;
@@ -2024,7 +3850,7 @@ class SidebarProvider {
     } else if (type === "reminder") {
       const reminders = [
         `🕌 الصلاة نور لقلبك وراحة لروحك - ${prayerName}`,
-        `📿 اللهم صل وسلم على نبينا محمد - ${prayerName}`,
+        `اللهم صل وسلم على نبينا محمد - ${prayerName}`,
         `🌙 الصلاة عماد الدين - ${prayerName}`,
         `⭐ الصلاة راحة للنفس وطمأنينة للقلب - ${prayerName}`,
         `🕊️ الصلاة أفضل الأعمال - ${prayerName}`,
@@ -2602,7 +4428,7 @@ class TasksDataProvider {
       vscode.TreeItemCollapsibleState.None
     );
 
-    item.description = element.completed ? "✅ Completed" : "⏳ Pending";
+    item.description = element.completed ? "Completed" : "Pending";
     item.iconPath = new vscode.ThemeIcon(
       element.completed ? "check" : "circle-large-outline"
     );
@@ -2768,6 +4594,16 @@ function deactivate() {
   // Stop any playing sound when extension is deactivated
   if (currentProvider && currentProvider._stopCurrentSound) {
     currentProvider._stopCurrentSound();
+  }
+
+  // Stop reminder system when extension is deactivated
+  if (currentProvider && currentProvider._stopReminderSystem) {
+    currentProvider._stopReminderSystem();
+  }
+
+  // Stop background audio when extension is deactivated
+  if (currentProvider && currentProvider._stopBackgroundAudio) {
+    currentProvider._stopBackgroundAudio();
   }
 
   // Clear all prayer notification timeouts

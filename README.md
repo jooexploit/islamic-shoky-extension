@@ -1,6 +1,6 @@
 # Islamic Shoky - Islamic Productivity Extension
 
-[![Version](https://img.shields.io/badge/version-1.0.2-blue.svg)](https://marketplace.visualstudio.com/items?itemName=islamic-shoky.islamic-shoky)
+[![Version](https://img.shields.io/badge/version-1.2.0-blue.svg)](https://marketplace.visualstudio.com/items?itemName=islamic-shoky.islamic-shoky)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![VS Code](https://img.shields.io/badge/VS_Code-1.103-blue.svg)](https://code.visualstudio.com/)
 
@@ -27,12 +27,12 @@ A comprehensive Islamic productivity extension for Visual Studio Code that helps
 - **Custom Azkar**: Add your own favorite azkar to the collection
 
   ![custom azkar](img/custom_azkar.png)
+
 - **Sound Notifications**: Special audio notifications for Prophet Muhammad's azkar (ﷺ)
   ![notfication](img/notfication.png)
 - **Arabic Text**: Authentic Arabic text with proper Islamic calligraphy
 
   ![daily azkar](img/daily_azkar.png)
-
 
 ### ⏱️ Pomodoro Timer
 
@@ -42,7 +42,6 @@ A comprehensive Islamic productivity extension for Visual Studio Code that helps
 
   ![pomodoro](img/pomodoro.png)
 
-
 ### ✅ Todo List
 
 - **Task Management**: Create, edit, and manage your programming tasks
@@ -51,7 +50,6 @@ A comprehensive Islamic productivity extension for Visual Studio Code that helps
 - **Local Storage**: Your tasks are saved locally and persist between sessions
 
   ![to do list](img/to_do_list.png)
-
 
 ### 🎨 Beautiful UI
 
@@ -171,6 +169,19 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **Email**: youseftamereg@gmail.com
 
 ## 🔄 Release Notes
+
+### 1.2.0
+
+- **🎵 Quran Audio Player**: Added comprehensive Quran audio player with support for various renowned reciters
+- **📖 Chapter Navigation**: Easy navigation through Quran chapters (Surahs) with play, pause, stop, and skip controls
+- **🎨 UI Enhancements**: Completely redesigned user interface with modern design and better user experience
+- **🖥️ Improved Navigation**: Enhanced sidebar navigation and panel organization for better workflow
+- **📿 Extended Azkar Collection**: Added extensive collection of authentic Islamic azkar and daily duaa (supplications)
+- **🌅 Morning/Evening Azkar**: Dedicated morning and evening remembrances with audio pronunciation guidance
+- **🔧 Bug Fixes**: Fixed notification timing, improved API reliability, and enhanced error handling
+- **⚡ Performance**: Optimized extension loading times and improved memory management
+- **🌍 Cross-platform**: Enhanced cross-platform compatibility and better VS Code theme integration
+- **🎧 Audio Support**: High-quality audio streaming for Quran and azkar with background playback capability
 
 ### 1.0.2
 

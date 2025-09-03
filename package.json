@@ -2,7 +2,7 @@
   "name": "islamic-shoky",
   "displayName": "Islamic Shoky - Islamic Productivity Extension",
   "description": "A comprehensive Islamic productivity extension for VS Code featuring prayer times, daily azkar, pomodoro timer, todo list, and Islamic reminders to help Muslim developers maintain their faith while coding.",
-  "version": "1.0.2",
+  "version": "1.2.0",
   "publisher": "jooexploit",
   "author": {
     "name": "jooexploit"
@@ -59,37 +59,37 @@
       },
       {
         "command": "islamic-shoky.timer.start",
-        "title": "▶️ Start Timer",
+        "title": "Start Timer",
         "icon": "$(play)"
       },
       {
         "command": "islamic-shoky.timer.pause",
-        "title": "⏸️ Pause Timer",
+        "title": "Pause Timer",
         "icon": "$(debug-pause)"
       },
       {
         "command": "islamic-shoky.timer.stop",
-        "title": "⏹️ Stop Timer",
+        "title": "Stop Timer",
         "icon": "$(debug-stop)"
       },
       {
         "command": "islamic-shoky.timer.refresh",
-        "title": "🔄 Refresh Timer",
+        "title": "Refresh Timer",
         "icon": "$(refresh)"
       },
       {
         "command": "islamic-shoky.prayer.refresh",
-        "title": "🔄 Refresh Prayer",
+        "title": "Refresh Prayer",
         "icon": "$(refresh)"
       },
       {
         "command": "islamic-shoky.prayer.setLocation",
-        "title": "📍 Set Location",
+        "title": "Set Location",
         "icon": "$(location)"
       },
       {
         "command": "islamic-shoky.tasks.refresh",
-        "title": "🔄 Refresh Tasks",
+        "title": "Refresh Tasks",
         "icon": "$(refresh)"
       }
     ],
@@ -115,6 +115,11 @@
           "type": "boolean",
           "default": true,
           "description": "Enable programming task management (todo list)"
+        },
+        "islamic-shoky.enableQuranAudio": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable Quran audio player with surah, juz, and hizb selection"
         },
         "islamic-shoky.focusDuration": {
           "type": "number",
