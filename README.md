@@ -8,6 +8,17 @@ A comprehensive Islamic productivity extension for Visual Studio Code that helps
 
 ## 🌟 Features
 
+#### 🎵 Quran Audio Player
+
+- **Audio Playback**: Added comprehensive Quran audio player functionality
+- **Recitation Support**: Support for various renowned Quran reciters
+- **Chapter Navigation**: Easy navigation through Quran chapters (Surahs)
+- **Verse Control**: Play, pause, stop, and skip between verses
+- **Audio Quality**: High-quality audio streaming for spiritual listening
+- **Background Play**: Continue listening while coding
+
+  ![Quran player](img/quran_player.png)
+
 ### 🕌 Prayer Times
 
 - **Accurate Prayer Times**: Get precise prayer times based on your location using multiple calculation methods
