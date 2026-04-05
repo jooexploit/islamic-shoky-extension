@@ -5,6 +5,31 @@ All notable changes to **Islamic Shoky** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-04-05
+
+### ✨ New Features
+
+#### 🕌 Prayer Reminder System
+
+- **Adhan Notifications**: Added per-prayer notifications at prayer time (`It's time for [Prayer Name]`)
+- **Iqama Preparation Reminder**: Added reminder after adhan to prepare for prayer
+- **Urgent Prayer Action Panel**: Added full-screen `GO PRAY NOW` webview panel for urgent prayer action
+- **Previous Prayer Check Flow**: Added confirmation checks before the next prayer and repeat reminders when not confirmed
+- **State Persistence**: Persisted prayer reminder and response state using extension storage to avoid duplicate reminders
+- **Configurable Timing**: Added settings for Iqama reminder timing and repeat-check intervals
+
+#### 🗂️ Tabbed Main Panel Navigation
+
+- **Top Tab Navigation**: Added tabs for Prayer, Azkar, Pomodoro, Tasks, and Quran in the main panel
+- **Default Prayer Tab**: Prayer tab is selected first when available
+- **Conditional Tab Rendering**: Tabs follow enabled/disabled module settings
+- **Reduced Vertical Scrolling**: Switched from long stacked sections to tabbed content panes
+
+### 🔧 Improvements
+
+- **Reminder Scheduling Reliability**: Improved scheduling flow around prayer transitions and follow-up reminders
+- **User Focus UX**: Stronger visual intervention for prayer urgency while keeping existing extension logic intact
+
 ## [1.2.0] - 2025-09-03
 
 ### ✨ New Features

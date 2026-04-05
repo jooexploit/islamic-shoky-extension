@@ -2,7 +2,7 @@
 // Import the module and reference it with the alias vscode in your code below
 const vscode = require("vscode");
 const path = require("path");
-const { spawn } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 
 /**
  * Sidebar Provider Class
@@ -18,6 +18,12 @@ class SidebarProvider {
     this._audioStatusCheck = null; // Audio status check interval
     this._reminderInterval = null; // 5-minute reminder interval
     this._reminderAudioProcess = null; // Background reminder audio process
+    this._goPrayPanel = null; // Urgent prayer reminder panel
+    this._stateKeys = {
+      prayerEvents: "islamic-shoky.prayerEvents",
+      prayerResponses: "islamic-shoky.prayerResponses",
+      lastPrayerNotified: "islamic-shoky.lastPrayerNotified",
+    };
   }
 
   resolveWebviewView(webviewView) {
@@ -95,7 +101,7 @@ class SidebarProvider {
             this._playQuranBackground(
               message.audioUrl,
               message.surah,
-              message.reciter
+              message.reciter,
             );
             break;
           case "stopQuranBackground":
@@ -105,7 +111,7 @@ class SidebarProvider {
         }
       },
       undefined,
-      this._context.subscriptions
+      this._context.subscriptions,
     );
 
     // Clean up when webview is disposed
@@ -151,7 +157,7 @@ class SidebarProvider {
       "Islamic Shoky would like to detect your location for accurate prayer times. How would you like to proceed?",
       "Auto-detect Location",
       "Enter Location Manually",
-      "Cancel"
+      "Cancel",
     );
 
     if (choice === "Auto-detect Location") {
@@ -204,13 +210,13 @@ class SidebarProvider {
     // Forward tasks data to the tasks provider
     console.log(
       "SidebarProvider: Forwarding tasks to TasksDataProvider:",
-      tasks
+      tasks,
     );
     if (tasksProvider && tasks) {
       tasksProvider.updateTasks(tasks);
     } else {
       console.log(
-        "SidebarProvider: tasksProvider not available or no tasks data"
+        "SidebarProvider: tasksProvider not available or no tasks data",
       );
     }
   }
@@ -218,23 +224,24 @@ class SidebarProvider {
   _openSettings() {
     vscode.commands.executeCommand(
       "workbench.action.openSettings",
-      "islamic-shoky"
+      "islamic-shoky",
     );
   }
 
   _playAzkarSound(azkarText) {
+    const config = this._getConfiguration();
     // Play sound for Prophet Muhammad's azkar using Node.js
     console.log("_playAzkarSound called with:", azkarText);
     if (
       azkarText.includes("اللهم صل وسلم على نبينا محمد") &&
-      this._config.enableAzkarSound
+      config.enableAzkarSound
     ) {
       console.log("Playing sound for Prophet Muhammad azkar using Node.js");
 
       // Stop any existing sound
       this._stopCurrentSound();
 
-      const delay = this._config.azkarSoundDelay * 1000; // Convert to milliseconds
+      const delay = config.azkarSoundDelay * 1000; // Convert to milliseconds
 
       setTimeout(() => {
         try {
@@ -245,7 +252,7 @@ class SidebarProvider {
       }, delay);
     } else {
       console.log(
-        "Sound not triggered - either not Prophet azkar or sound disabled"
+        "Sound not triggered - either not Prophet azkar or sound disabled",
       );
     }
   }
@@ -256,7 +263,7 @@ class SidebarProvider {
       const soundFilePath = path.join(
         this._context.extensionPath,
         "sounds",
-        "salah.mp3"
+        "salah.mp3",
       );
       console.log("Sound file path:", soundFilePath);
 
@@ -274,26 +281,44 @@ class SidebarProvider {
         this._soundProcess = spawn("afplay", [soundFilePath]);
       } else {
         // Linux/Unix
-        // Try different audio players in order of preference
-        const audioPlayers = ["mpg123", "mpg321", "play", "aplay", "sox"];
+        // Choose only players that are actually installed.
+        const selectedPlayer = this._findAvailableCommand([
+          "mpv",
+          "cvlc",
+          "ffplay",
+          "mpg123",
+          "mpg321",
+          "play",
+          "aplay",
+        ]);
 
-        for (const player of audioPlayers) {
-          try {
-            if (player === "play") {
-              // sox play command
-              this._soundProcess = spawn("play", [soundFilePath]);
-            } else if (player === "aplay") {
-              // ALSA player
-              this._soundProcess = spawn("aplay", [soundFilePath]);
-            } else {
-              // mpg123 or mpg321
-              this._soundProcess = spawn(player, ["-q", soundFilePath]);
-            }
-            break;
-          } catch (error) {
-            // Continue to next player - error logged above
-            continue;
-          }
+        if (selectedPlayer === "mpv") {
+          this._soundProcess = spawn("mpv", [
+            "--no-video",
+            "--quiet",
+            soundFilePath,
+          ]);
+        } else if (selectedPlayer === "cvlc") {
+          this._soundProcess = spawn("cvlc", [
+            "--intf",
+            "dummy",
+            "--play-and-exit",
+            soundFilePath,
+          ]);
+        } else if (selectedPlayer === "ffplay") {
+          this._soundProcess = spawn("ffplay", [
+            "-nodisp",
+            "-autoexit",
+            "-loglevel",
+            "quiet",
+            soundFilePath,
+          ]);
+        } else if (selectedPlayer === "play") {
+          this._soundProcess = spawn("play", [soundFilePath]);
+        } else if (selectedPlayer === "aplay") {
+          this._soundProcess = spawn("aplay", [soundFilePath]);
+        } else if (selectedPlayer) {
+          this._soundProcess = spawn(selectedPlayer, ["-q", soundFilePath]);
         }
       }
 
@@ -331,7 +356,7 @@ class SidebarProvider {
     this._currentNotification = vscode.window
       .showInformationMessage(
         `🔊 Playing sound for: اللهم صل وسلم على نبينا محمد`,
-        "Stop Sound"
+        "Stop Sound",
       )
       .then((selection) => {
         if (selection === "Stop Sound") {
@@ -421,7 +446,13 @@ class SidebarProvider {
 
     let playerFound = false;
 
-    for (const player of audioPlayers) {
+    const availablePlayers = audioPlayers.filter((player) =>
+      player.name === "paplay" || player.name === "wget"
+        ? this._findAvailableCommand([player.name]) !== null
+        : this._findAvailableCommand([player.name]) !== null,
+    );
+
+    for (const player of availablePlayers) {
       try {
         console.log(`Trying audio player: ${player.name}`);
 
@@ -444,7 +475,7 @@ class SidebarProvider {
         // Test if the process started successfully
         if (this._audioProcess.pid) {
           console.log(
-            `Successfully started ${player.name} with PID: ${this._audioProcess.pid}`
+            `Successfully started ${player.name} with PID: ${this._audioProcess.pid}`,
           );
           playerFound = true;
           this._setupAudioProcessHandlers(surah, reciter, audioUrl);
@@ -459,7 +490,7 @@ class SidebarProvider {
 
     if (!playerFound) {
       console.log(
-        "No suitable audio player found, falling back to webview audio"
+        "No suitable audio player found, falling back to webview audio",
       );
       this._fallbackToWebviewAudio(audioUrl, surah, reciter);
     }
@@ -479,7 +510,7 @@ class SidebarProvider {
 
     // Show notification
     vscode.window.showInformationMessage(
-      `Playing Quran: Surah ${surah} by ${reciter}`
+      `Playing Quran: Surah ${surah} by ${reciter}`,
     );
 
     // Handle process completion
@@ -537,7 +568,7 @@ class SidebarProvider {
     }
 
     vscode.window.showInformationMessage(
-      `Playing Quran (browser mode): Surah ${surah} by ${reciter}`
+      `Playing Quran (browser mode): Surah ${surah} by ${reciter}`,
     );
   }
 
@@ -610,7 +641,7 @@ class SidebarProvider {
       const soundFilePath = path.join(
         this._context.extensionPath,
         "sounds",
-        "salah-notification.mp3"
+        "salah-notification.mp3",
       );
 
       console.log("Playing reminder sound:", soundFilePath);
@@ -627,29 +658,46 @@ class SidebarProvider {
         this._reminderAudioProcess = spawn("afplay", [soundFilePath]);
       } else {
         // Linux/Unix - try different audio players
-        const audioPlayers = ["mpg123", "mpg321", "play", "aplay", "cvlc"];
+        const selectedPlayer = this._findAvailableCommand([
+          "mpv",
+          "cvlc",
+          "ffplay",
+          "mpg123",
+          "mpg321",
+          "play",
+          "aplay",
+        ]);
 
-        for (const player of audioPlayers) {
-          try {
-            if (player === "play") {
-              this._reminderAudioProcess = spawn("play", [soundFilePath]);
-            } else if (player === "aplay") {
-              this._reminderAudioProcess = spawn("aplay", [soundFilePath]);
-            } else if (player === "cvlc") {
-              this._reminderAudioProcess = spawn("cvlc", [
-                "--intf",
-                "dummy",
-                "--play-and-exit",
-                soundFilePath,
-              ]);
-            } else {
-              this._reminderAudioProcess = spawn(player, ["-q", soundFilePath]);
-            }
-            break;
-          } catch (error) {
-            console.log(`Failed to start ${player} for reminder:`, error);
-            continue;
-          }
+        if (selectedPlayer === "mpv") {
+          this._reminderAudioProcess = spawn("mpv", [
+            "--no-video",
+            "--quiet",
+            soundFilePath,
+          ]);
+        } else if (selectedPlayer === "cvlc") {
+          this._reminderAudioProcess = spawn("cvlc", [
+            "--intf",
+            "dummy",
+            "--play-and-exit",
+            soundFilePath,
+          ]);
+        } else if (selectedPlayer === "ffplay") {
+          this._reminderAudioProcess = spawn("ffplay", [
+            "-nodisp",
+            "-autoexit",
+            "-loglevel",
+            "quiet",
+            soundFilePath,
+          ]);
+        } else if (selectedPlayer === "play") {
+          this._reminderAudioProcess = spawn("play", [soundFilePath]);
+        } else if (selectedPlayer === "aplay") {
+          this._reminderAudioProcess = spawn("aplay", [soundFilePath]);
+        } else if (selectedPlayer) {
+          this._reminderAudioProcess = spawn(selectedPlayer, [
+            "-q",
+            soundFilePath,
+          ]);
         }
       }
 
@@ -696,13 +744,25 @@ class SidebarProvider {
     this._stopReminderAudio();
   }
 
+  _findAvailableCommand(commands) {
+    for (const command of commands) {
+      const result = spawnSync("sh", ["-c", `command -v ${command}`], {
+        stdio: "ignore",
+      });
+      if (result.status === 0) {
+        return command;
+      }
+    }
+    return null;
+  }
+
   _handleAzkarChanged(azkar) {
     const config = this._getConfiguration();
     if (config.enableAzkarNotifications) {
       // Show the azkar notification
       const notification = vscode.window.showInformationMessage(
         `${azkar.arabic}`,
-        "View in Panel"
+        "View in Panel",
       );
 
       // Auto-dismiss after 10 seconds
@@ -716,7 +776,7 @@ class SidebarProvider {
       notification.then((selection) => {
         if (selection === "View in Panel") {
           vscode.commands.executeCommand(
-            "workbench.view.extension.islamic-shoky-sidebar"
+            "workbench.view.extension.islamic-shoky-sidebar",
           );
         }
       });
@@ -763,6 +823,16 @@ class SidebarProvider {
       azkarSoundDelay: config.get("azkarSoundDelay", 2),
       enablePrayerNotifications: config.get("enablePrayerNotifications", true),
       prayerReminderDelay: config.get("prayerReminderDelay", 5),
+      enablePrayerReminderSystem: config.get(
+        "enablePrayerReminderSystem",
+        true,
+      ),
+      iqamaPrepareDelayMinutes: config.get("iqamaPrepareDelayMinutes", 15),
+      iqamaUrgentDelayMinutes: config.get("iqamaUrgentDelayMinutes", 20),
+      previousPrayerRepeatDelayMinutes: config.get(
+        "previousPrayerRepeatDelayMinutes",
+        10,
+      ),
     };
   }
 
@@ -1513,8 +1583,8 @@ class SidebarProvider {
                   vscode.Uri.joinPath(
                     this._context.extensionUri,
                     "icons",
-                    "settings.svg"
-                  )
+                    "settings.svg",
+                  ),
                 )
               : ""
           }" alt="Settings" class="button-icon">
@@ -1525,8 +1595,8 @@ class SidebarProvider {
                 vscode.Uri.joinPath(
                   this._context.extensionUri,
                   "media",
-                  "logo.png"
-                )
+                  "logo.png",
+                ),
               )
             : ""
         }" alt="Islamic Shoky Logo">
@@ -1545,8 +1615,8 @@ class SidebarProvider {
                   vscode.Uri.joinPath(
                     this._context.extensionUri,
                     "icons",
-                    "prayer-time.svg"
-                  )
+                    "prayer-time.svg",
+                  ),
                 )
               : ""
           }" alt="Prayer Time" class="section-icon">
@@ -1561,8 +1631,8 @@ class SidebarProvider {
                       vscode.Uri.joinPath(
                         this._context.extensionUri,
                         "icons",
-                        "globe.svg"
-                      )
+                        "globe.svg",
+                      ),
                     )
                   : ""
               }" alt="Globe" class="inline-icon"> Location not set
@@ -1574,8 +1644,8 @@ class SidebarProvider {
                       vscode.Uri.joinPath(
                         this._context.extensionUri,
                         "icons",
-                        "location.svg"
-                      )
+                        "location.svg",
+                      ),
                     )
                   : ""
               }" alt="Location" class="button-icon"> Set Location
@@ -1613,8 +1683,8 @@ class SidebarProvider {
                   vscode.Uri.joinPath(
                     this._context.extensionUri,
                     "icons",
-                    "azkar.svg"
-                  )
+                    "azkar.svg",
+                  ),
                 )
               : ""
           }" alt="Azkar" class="section-icon">
@@ -1631,8 +1701,8 @@ class SidebarProvider {
                     vscode.Uri.joinPath(
                       this._context.extensionUri,
                       "icons",
-                      "refresh.svg"
-                    )
+                      "refresh.svg",
+                    ),
                   )
                 : ""
             }" alt="Refresh" class="button-icon"> New Azkar
@@ -1655,8 +1725,8 @@ class SidebarProvider {
                   vscode.Uri.joinPath(
                     this._context.extensionUri,
                     "icons",
-                    "pomodoro.svg"
-                  )
+                    "pomodoro.svg",
+                  ),
                 )
               : ""
           }" alt="Pomodoro" class="section-icon">
@@ -1691,8 +1761,8 @@ class SidebarProvider {
                   vscode.Uri.joinPath(
                     this._context.extensionUri,
                     "icons",
-                    "tasks.svg"
-                  )
+                    "tasks.svg",
+                  ),
                 )
               : ""
           }" alt="Tasks" class="section-icon">
@@ -1733,8 +1803,8 @@ class SidebarProvider {
                   vscode.Uri.joinPath(
                     this._context.extensionUri,
                     "icons",
-                    "quran.svg"
-                  )
+                    "quran.svg",
+                  ),
                 )
               : ""
           }" alt="Quran" class="section-icon">
@@ -1770,8 +1840,8 @@ class SidebarProvider {
                       vscode.Uri.joinPath(
                         this._context.extensionUri,
                         "icons",
-                        "play.svg"
-                      )
+                        "play.svg",
+                      ),
                     )
                   : ""
               }" alt="Play" class="button-icon">
@@ -1784,8 +1854,8 @@ class SidebarProvider {
                       vscode.Uri.joinPath(
                         this._context.extensionUri,
                         "icons",
-                        "stop.svg"
-                      )
+                        "stop.svg",
+                      ),
                     )
                   : ""
               }" alt="Stop" class="button-icon">
@@ -1798,8 +1868,8 @@ class SidebarProvider {
                       vscode.Uri.joinPath(
                         this._context.extensionUri,
                         "icons",
-                        "download.svg"
-                      )
+                        "download.svg",
+                      ),
                     )
                   : ""
               }" alt="Download" class="button-icon">
@@ -1824,7 +1894,7 @@ class SidebarProvider {
       }
 			
 			<div class="footer">
-				<p>Islamic Shoky Extension v1.2.0</p>
+				<p>Islamic Shoky Extension v1.30</p>
 				<p>Stay focused, stay blessed 
 					<img src="${
             this._view
@@ -1832,8 +1902,8 @@ class SidebarProvider {
                   vscode.Uri.joinPath(
                     this._context.extensionUri,
                     "icons",
-                    "islamic.svg"
-                  )
+                    "islamic.svg",
+                  ),
                 )
               : ""
           }" alt="Islamic" class="inline-icon">
@@ -2268,33 +2338,104 @@ class SidebarProvider {
 				async function requestIPLocation() {
 					showLoading();
 					try {
-						// Try to get location based on IP address using a free IP geolocation service
-						const ipResponse = await fetch('https://ipapi.co/json/');
-						if (!ipResponse.ok) {
-							throw new Error('IP location service unavailable');
+						const fetchWithTimeout = async (url, timeoutMs = 7000) => {
+							const controller = new AbortController();
+							const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+							try {
+								const response = await fetch(url, { signal: controller.signal });
+								return response;
+							} finally {
+								clearTimeout(timeoutId);
+							}
+						};
+
+						const providers = [
+							{
+								name: 'ipapi',
+								url: 'https://ipapi.co/json/',
+								parse: (data) => ({
+									latitude: parseFloat(data.latitude),
+									longitude: parseFloat(data.longitude),
+									city: data.city,
+									country: data.country_name,
+								}),
+							},
+							{
+								name: 'ipwhois',
+								url: 'https://ipwho.is/',
+								parse: (data) => {
+									if (data.success === false) {
+										return null;
+									}
+									return {
+										latitude: parseFloat(data.latitude),
+										longitude: parseFloat(data.longitude),
+										city: data.city,
+										country: data.country,
+									};
+								},
+							},
+							{
+								name: 'ip-api',
+								url: 'https://ip-api.com/json/?fields=status,country,city,lat,lon',
+								parse: (data) => {
+									if (data.status !== 'success') {
+										return null;
+									}
+									return {
+										latitude: parseFloat(data.lat),
+										longitude: parseFloat(data.lon),
+										city: data.city,
+										country: data.country,
+									};
+								},
+							},
+						];
+
+						let detectedLocation = null;
+
+						for (const provider of providers) {
+							try {
+								const response = await fetchWithTimeout(provider.url);
+								if (!response.ok) {
+									continue;
+								}
+
+								const payload = await response.json();
+								const parsed = provider.parse(payload);
+
+								if (
+									parsed &&
+									Number.isFinite(parsed.latitude) &&
+									Number.isFinite(parsed.longitude) &&
+									parsed.city
+								) {
+									detectedLocation = {
+										latitude: parsed.latitude,
+										longitude: parsed.longitude,
+										city: parsed.city + (parsed.country ? ', ' + parsed.country : ''),
+										type: 'ip-based',
+									};
+									break;
+								}
+							} catch (providerError) {
+								console.log('IP provider failed:', provider.name, providerError);
+							}
 						}
-						
-						const ipData = await ipResponse.json();
-						
-						if (ipData.latitude && ipData.longitude && ipData.city) {
-							userLocation = {
-								latitude: parseFloat(ipData.latitude),
-								longitude: parseFloat(ipData.longitude),
-								city: ipData.city + (ipData.country_name ? ', ' + ipData.country_name : ''),
-								type: 'ip-based'
-							};
-							
-							saveLocation();
-							updateLocationDisplay();
-							await fetchPrayerTimes();
-							
-							vscode.postMessage({
-								command: 'alert',
-								text: \`Location detected: \${userLocation.city}\`
-							});
-						} else {
-							throw new Error('Invalid IP location data');
+
+						if (!detectedLocation) {
+							throw new Error('All IP location providers failed');
 						}
+
+						userLocation = detectedLocation;
+						saveLocation();
+						updateLocationDisplay();
+						await fetchPrayerTimes();
+
+						vscode.postMessage({
+							command: 'alert',
+							text: 'Location detected: ' + userLocation.city
+						});
 					} catch (error) {
 						console.error('IP-based location error:', error);
 						hideLoading();
@@ -3787,7 +3928,12 @@ class SidebarProvider {
   // Prayer notification methods
   _schedulePrayerNotifications(prayerTimes) {
     const config = this._getConfiguration();
-    if (!config.enablePrayerNotifications) return;
+    if (
+      !config.enablePrayerNotifications ||
+      !config.enablePrayerReminderSystem
+    ) {
+      return;
+    }
 
     // Clear existing timeouts
     this._clearPrayerTimeouts();
@@ -3814,27 +3960,83 @@ class SidebarProvider {
         prayerDateTime.setDate(prayerDateTime.getDate() + 1);
       }
 
+      const prayerDateKey = this._toDateKey(prayerDateTime);
+
+      // Ask about the previous prayer one minute before adhan.
+      const preCheckTime = new Date(prayerDateTime.getTime() - 60 * 1000);
+      const timeUntilPreCheck = preCheckTime - now;
+      const preCheckEventKey = `${prayerDateKey}:${prayer.key}:precheck`;
+      if (timeUntilPreCheck > 0) {
+        const preCheckTimeout = setTimeout(() => {
+          void this._runUniquePrayerEvent(preCheckEventKey, async () => {
+            await this._askPreviousPrayerCheck(prayer, prayerDateTime);
+          });
+        }, timeUntilPreCheck);
+
+        this._prayerTimeouts.set(`${prayer.key}_precheck`, preCheckTimeout);
+      }
+
       // Schedule notification at prayer time
       const timeUntilPrayer = prayerDateTime - now;
       if (timeUntilPrayer > 0) {
         const prayerTimeout = setTimeout(() => {
-          this._showPrayerNotification(prayer.name, "prayer");
+          void this._runUniquePrayerEvent(
+            `${prayerDateKey}:${prayer.key}:adhan`,
+            async () => {
+              await this._setLastPrayerNotified(prayer.name, prayerDateTime);
+              this._showPrayerNotification(prayer.name, "prayer");
+
+              // If pre-check couldn't run before prayer, run it now.
+              if (timeUntilPreCheck <= 0) {
+                await this._askPreviousPrayerCheck(prayer, prayerDateTime);
+              }
+            },
+          );
         }, timeUntilPrayer);
 
         this._prayerTimeouts.set(`${prayer.key}_prayer`, prayerTimeout);
       }
 
-      // Schedule reminder notification after prayer time + delay
-      const reminderTime = new Date(
-        prayerDateTime.getTime() + config.prayerReminderDelay * 60 * 1000
+      // Schedule iqama preparation reminder after adhan.
+      const prepareDelayMinutes = Math.max(1, config.iqamaPrepareDelayMinutes);
+      const prepareTime = new Date(
+        prayerDateTime.getTime() + prepareDelayMinutes * 60 * 1000,
       );
-      const timeUntilReminder = reminderTime - now;
-      if (timeUntilReminder > 0) {
-        const reminderTimeout = setTimeout(() => {
-          this._showPrayerNotification(prayer.name, "reminder");
-        }, timeUntilReminder);
+      const timeUntilPrepare = prepareTime - now;
+      if (timeUntilPrepare > 0) {
+        const prepareTimeout = setTimeout(() => {
+          void this._runUniquePrayerEvent(
+            `${prayerDateKey}:${prayer.key}:iqama-prepare`,
+            async () => {
+              this._showPrayerNotification(prayer.name, "prepare");
+            },
+          );
+        }, timeUntilPrepare);
 
-        this._prayerTimeouts.set(`${prayer.key}_reminder`, reminderTimeout);
+        this._prayerTimeouts.set(`${prayer.key}_prepare`, prepareTimeout);
+      }
+
+      // Schedule urgent "GO PRAY NOW" reminder.
+      const urgentDelayMinutes = Math.max(
+        prepareDelayMinutes,
+        config.iqamaUrgentDelayMinutes,
+      );
+      const urgentTime = new Date(
+        prayerDateTime.getTime() + urgentDelayMinutes * 60 * 1000,
+      );
+      const timeUntilUrgent = urgentTime - now;
+      if (timeUntilUrgent > 0) {
+        const urgentTimeout = setTimeout(() => {
+          void this._runUniquePrayerEvent(
+            `${prayerDateKey}:${prayer.key}:iqama-urgent`,
+            async () => {
+              this._showPrayerNotification(prayer.name, "urgent");
+              this._openGoPrayNowPanel(prayer.name);
+            },
+          );
+        }, timeUntilUrgent);
+
+        this._prayerTimeouts.set(`${prayer.key}_urgent`, urgentTimeout);
       }
     });
   }
@@ -3846,22 +4048,17 @@ class SidebarProvider {
     let message = "";
 
     if (type === "prayer") {
-      message = `🕌 حان وقت الصلاة - ${prayerName}\n\nقم فصلِّ؛ الصلاة نور لقلبك وراحة لروحك.`;
-    } else if (type === "reminder") {
-      const reminders = [
-        `🕌 الصلاة نور لقلبك وراحة لروحك - ${prayerName}`,
-        `اللهم صل وسلم على نبينا محمد - ${prayerName}`,
-        `🌙 الصلاة عماد الدين - ${prayerName}`,
-        `⭐ الصلاة راحة للنفس وطمأنينة للقلب - ${prayerName}`,
-        `🕊️ الصلاة أفضل الأعمال - ${prayerName}`,
-      ];
-      message = reminders[Math.floor(Math.random() * reminders.length)];
+      message = `It's time for ${prayerName}`;
+    } else if (type === "prepare") {
+      message = "Prepare for prayer, Iqama is قريب";
+    } else if (type === "urgent") {
+      message = "GO PRAY NOW";
     }
 
     // Show the prayer notification
     const notification = vscode.window.showInformationMessage(
       message,
-      "View Prayer Times"
+      "View Prayer Times",
     );
 
     // Auto-dismiss after 10 seconds
@@ -3874,10 +4071,183 @@ class SidebarProvider {
     notification.then((selection) => {
       if (selection === "View Prayer Times") {
         vscode.commands.executeCommand(
-          "workbench.view.extension.islamic-shoky-sidebar"
+          "workbench.view.extension.islamic-shoky-sidebar",
         );
       }
     });
+  }
+
+  _toDateKey(date) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+
+  async _runUniquePrayerEvent(eventKey, handler) {
+    const events = this._context.globalState.get(
+      this._stateKeys.prayerEvents,
+      {},
+    );
+    if (events[eventKey]) {
+      return;
+    }
+
+    events[eventKey] = Date.now();
+    await this._context.globalState.update(
+      this._stateKeys.prayerEvents,
+      events,
+    );
+    await handler();
+  }
+
+  async _setLastPrayerNotified(prayerName, prayerDate) {
+    await this._context.globalState.update(this._stateKeys.lastPrayerNotified, {
+      prayerName,
+      date: this._toDateKey(prayerDate),
+      notifiedAt: new Date().toISOString(),
+    });
+  }
+
+  _getPreviousPrayer(currentPrayerKey) {
+    const mapping = {
+      Fajr: { key: "Isha", name: "Isha", dayOffset: -1 },
+      Dhuhr: { key: "Fajr", name: "Fajr", dayOffset: 0 },
+      Asr: { key: "Dhuhr", name: "Dhuhr", dayOffset: 0 },
+      Maghrib: { key: "Asr", name: "Asr", dayOffset: 0 },
+      Isha: { key: "Maghrib", name: "Maghrib", dayOffset: 0 },
+    };
+    return mapping[currentPrayerKey] || null;
+  }
+
+  async _askPreviousPrayerCheck(currentPrayer, currentPrayerDate) {
+    const config = this._getConfiguration();
+    if (
+      !config.enablePrayerNotifications ||
+      !config.enablePrayerReminderSystem
+    ) {
+      return;
+    }
+
+    const previousPrayer = this._getPreviousPrayer(currentPrayer.key);
+    if (!previousPrayer) {
+      return;
+    }
+
+    const previousPrayerDate = new Date(currentPrayerDate);
+    previousPrayerDate.setDate(
+      previousPrayerDate.getDate() + previousPrayer.dayOffset,
+    );
+    const responseKey = `${this._toDateKey(previousPrayerDate)}:${previousPrayer.key}`;
+
+    const responses = this._context.globalState.get(
+      this._stateKeys.prayerResponses,
+      {},
+    );
+    if (responses[responseKey] === true) {
+      return;
+    }
+
+    const selection = await vscode.window.showInformationMessage(
+      `Did you pray ${previousPrayer.name}?`,
+      "Yes, Alhamdulillah",
+      "Remind me in 10 min",
+    );
+
+    if (selection === "Yes, Alhamdulillah") {
+      responses[responseKey] = true;
+      await this._context.globalState.update(
+        this._stateKeys.prayerResponses,
+        responses,
+      );
+      return;
+    }
+
+    responses[responseKey] = false;
+    await this._context.globalState.update(
+      this._stateKeys.prayerResponses,
+      responses,
+    );
+
+    const repeatDelayMinutes = Math.max(
+      1,
+      config.previousPrayerRepeatDelayMinutes,
+    );
+    const repeatKey = `${currentPrayer.key}_prev_repeat`;
+    const existingTimeout = this._prayerTimeouts.get(repeatKey);
+    if (existingTimeout) {
+      clearTimeout(existingTimeout);
+    }
+
+    const repeatTimeout = setTimeout(
+      () => {
+        void this._askPreviousPrayerCheck(currentPrayer, currentPrayerDate);
+      },
+      repeatDelayMinutes * 60 * 1000,
+    );
+    this._prayerTimeouts.set(repeatKey, repeatTimeout);
+  }
+
+  _openGoPrayNowPanel(prayerName) {
+    if (!this._goPrayPanel) {
+      this._goPrayPanel = vscode.window.createWebviewPanel(
+        "islamicShokyGoPrayNow",
+        "Prayer Reminder",
+        vscode.ViewColumn.Active,
+        {
+          enableScripts: false,
+          retainContextWhenHidden: false,
+        },
+      );
+
+      this._goPrayPanel.onDidDispose(() => {
+        this._goPrayPanel = null;
+      });
+    } else {
+      this._goPrayPanel.reveal(vscode.ViewColumn.Active, false);
+    }
+
+    this._goPrayPanel.webview.html = `<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>Prayer Reminder</title>
+		<style>
+			body {
+				margin: 0;
+				min-height: 100vh;
+				display: flex;
+				align-items: center;
+				justify-content: center;
+				background: #000;
+				color: #fff;
+				font-family: var(--vscode-font-family, sans-serif);
+			}
+
+			.message {
+				text-align: center;
+				line-height: 1.15;
+				font-size: clamp(42px, 9vw, 120px);
+				font-weight: 900;
+				letter-spacing: 0.06em;
+			}
+
+			.sub {
+				margin-top: 18px;
+				font-size: clamp(16px, 2.3vw, 28px);
+				font-weight: 600;
+				color: #ffd95b;
+			}
+		</style>
+	</head>
+	<body>
+		<div class="message">
+			GO PRAY NOW
+			<div class="sub">${prayerName}</div>
+		</div>
+	</body>
+</html>`;
   }
 
   _clearPrayerTimeouts() {
@@ -3931,22 +4301,22 @@ class TimerDataProvider {
       // Timer status item
       const statusItem = new vscode.TreeItem(
         `${this.timerType} Session`,
-        vscode.TreeItemCollapsibleState.None
+        vscode.TreeItemCollapsibleState.None,
       );
       statusItem.description = this.getTimerStatus();
       statusItem.iconPath = new vscode.ThemeIcon(
         this.isRunning
           ? "play-circle"
           : this.isPaused
-          ? "debug-pause"
-          : "circle-large-outline"
+            ? "debug-pause"
+            : "circle-large-outline",
       );
       items.push(statusItem);
 
       // Time remaining item
       const timeItem = new vscode.TreeItem(
         this.formatTime(this.remainingTime),
-        vscode.TreeItemCollapsibleState.None
+        vscode.TreeItemCollapsibleState.None,
       );
       timeItem.description = `of ${this.formatTime(this.totalTime)}`;
       timeItem.iconPath = new vscode.ThemeIcon("clock");
@@ -3955,7 +4325,7 @@ class TimerDataProvider {
       // Pomodoro count item
       const countItem = new vscode.TreeItem(
         `Pomodoros: ${this.pomodoroCount}`,
-        vscode.TreeItemCollapsibleState.None
+        vscode.TreeItemCollapsibleState.None,
       );
       countItem.description = "completed today";
       countItem.iconPath = new vscode.ThemeIcon("check-all");
@@ -4064,7 +4434,7 @@ class TimerDataProvider {
         .showInformationMessage(
           "Focus session completed! Time for a break 🎉",
           "Start Break",
-          "Skip Break"
+          "Skip Break",
         )
         .then((selection) => {
           if (selection === "Start Break") {
@@ -4081,7 +4451,7 @@ class TimerDataProvider {
         .showInformationMessage(
           "Break completed! Ready for another focus session? 💪",
           "Start Focus",
-          "Later"
+          "Later",
         )
         .then((selection) => {
           if (selection === "Start Focus") {
@@ -4141,7 +4511,7 @@ class PrayerDataProvider {
             this.refresh();
             messageListener.dispose();
           }
-        }
+        },
       );
     }
   }
@@ -4171,7 +4541,7 @@ class PrayerDataProvider {
         // No location set
         const locationItem = new vscode.TreeItem(
           "Location not set",
-          vscode.TreeItemCollapsibleState.None
+          vscode.TreeItemCollapsibleState.None,
         );
         locationItem.description = "Set from main panel";
         locationItem.iconPath = new vscode.ThemeIcon("location");
@@ -4187,7 +4557,7 @@ class PrayerDataProvider {
         // Loading or error state
         const loadingItem = new vscode.TreeItem(
           "Loading prayer times...",
-          vscode.TreeItemCollapsibleState.None
+          vscode.TreeItemCollapsibleState.None,
         );
         loadingItem.iconPath = new vscode.ThemeIcon("loading~spin");
         items.push(loadingItem);
@@ -4197,7 +4567,7 @@ class PrayerDataProvider {
       // Next prayer item
       const nextPrayerItem = new vscode.TreeItem(
         `Next: ${this.nextPrayer.name}`,
-        vscode.TreeItemCollapsibleState.None
+        vscode.TreeItemCollapsibleState.None,
       );
       nextPrayerItem.description = this.formatTime(this.nextPrayer.time);
       nextPrayerItem.iconPath = new vscode.ThemeIcon("bell");
@@ -4208,7 +4578,7 @@ class PrayerDataProvider {
       if (remainingTime) {
         const remainingItem = new vscode.TreeItem(
           remainingTime,
-          vscode.TreeItemCollapsibleState.None
+          vscode.TreeItemCollapsibleState.None,
         );
         remainingItem.description = "remaining";
         remainingItem.iconPath = new vscode.ThemeIcon("clock");
@@ -4218,7 +4588,7 @@ class PrayerDataProvider {
       // Location item
       const locationItem = new vscode.TreeItem(
         this.currentLocation.city || "Current Location",
-        vscode.TreeItemCollapsibleState.None
+        vscode.TreeItemCollapsibleState.None,
       );
       locationItem.description = `${this.currentLocation.country || ""}`;
       locationItem.iconPath = new vscode.ThemeIcon("location");
@@ -4270,22 +4640,22 @@ class PrayerDataProvider {
 
     // Simplified prayer times (adjust based on actual calculation needs)
     times.push(
-      new Date(date.getFullYear(), date.getMonth(), date.getDate(), 5, 30)
+      new Date(date.getFullYear(), date.getMonth(), date.getDate(), 5, 30),
     ); // Fajr
     times.push(
-      new Date(date.getFullYear(), date.getMonth(), date.getDate(), 6, 45)
+      new Date(date.getFullYear(), date.getMonth(), date.getDate(), 6, 45),
     ); // Sunrise
     times.push(
-      new Date(date.getFullYear(), date.getMonth(), date.getDate(), 12, 30)
+      new Date(date.getFullYear(), date.getMonth(), date.getDate(), 12, 30),
     ); // Dhuhr
     times.push(
-      new Date(date.getFullYear(), date.getMonth(), date.getDate(), 15, 45)
+      new Date(date.getFullYear(), date.getMonth(), date.getDate(), 15, 45),
     ); // Asr
     times.push(
-      new Date(date.getFullYear(), date.getMonth(), date.getDate(), 18, 15)
+      new Date(date.getFullYear(), date.getMonth(), date.getDate(), 18, 15),
     ); // Maghrib
     times.push(
-      new Date(date.getFullYear(), date.getMonth(), date.getDate(), 19, 30)
+      new Date(date.getFullYear(), date.getMonth(), date.getDate(), 19, 30),
     ); // Isha
 
     return times;
@@ -4358,12 +4728,12 @@ class PrayerDataProvider {
       vscode.window
         .showInformationMessage(
           "Please set your location from the main Islamic Shoky panel first.",
-          "Open Main Panel"
+          "Open Main Panel",
         )
         .then((selection) => {
           if (selection === "Open Main Panel") {
             vscode.commands.executeCommand(
-              "workbench.view.extension.islamic-shoky-sidebar"
+              "workbench.view.extension.islamic-shoky-sidebar",
             );
           }
         });
@@ -4425,12 +4795,12 @@ class TasksDataProvider {
   getTreeItem(element) {
     const item = new vscode.TreeItem(
       element.text,
-      vscode.TreeItemCollapsibleState.None
+      vscode.TreeItemCollapsibleState.None,
     );
 
     item.description = element.completed ? "Completed" : "Pending";
     item.iconPath = new vscode.ThemeIcon(
-      element.completed ? "check" : "circle-large-outline"
+      element.completed ? "check" : "circle-large-outline",
     );
     // Remove contextValue to disable context menus
     item.tooltip = `${element.text} - ${
@@ -4446,7 +4816,7 @@ class TasksDataProvider {
       if (this.tasks.length === 0) {
         const emptyItem = new vscode.TreeItem(
           "No tasks found",
-          vscode.TreeItemCollapsibleState.None
+          vscode.TreeItemCollapsibleState.None,
         );
         emptyItem.description = "Create tasks from the main panel";
         emptyItem.iconPath = new vscode.ThemeIcon("info");
@@ -4485,14 +4855,17 @@ function activate(context) {
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(
       "islamic-shoky.panel",
-      currentProvider
-    )
+      currentProvider,
+    ),
   );
 
   // Register the timer data provider for Explorer panel
   timerProvider = new TimerDataProvider(context);
   context.subscriptions.push(
-    vscode.window.registerTreeDataProvider("islamic-shoky.timer", timerProvider)
+    vscode.window.registerTreeDataProvider(
+      "islamic-shoky.timer",
+      timerProvider,
+    ),
   );
 
   // Register the prayer data provider for Explorer panel
@@ -4500,59 +4873,62 @@ function activate(context) {
   context.subscriptions.push(
     vscode.window.registerTreeDataProvider(
       "islamic-shoky.prayer",
-      prayerProvider
-    )
+      prayerProvider,
+    ),
   );
 
   // Register the tasks data provider for Explorer panel
   tasksProvider = new TasksDataProvider(context);
   context.subscriptions.push(
-    vscode.window.registerTreeDataProvider("islamic-shoky.tasks", tasksProvider)
+    vscode.window.registerTreeDataProvider(
+      "islamic-shoky.tasks",
+      tasksProvider,
+    ),
   );
 
   // Register timer commands
   context.subscriptions.push(
     vscode.commands.registerCommand("islamic-shoky.timer.start", () => {
       timerProvider.startTimer();
-    })
+    }),
   );
 
   context.subscriptions.push(
     vscode.commands.registerCommand("islamic-shoky.timer.pause", () => {
       timerProvider.pauseTimer();
-    })
+    }),
   );
 
   context.subscriptions.push(
     vscode.commands.registerCommand("islamic-shoky.timer.stop", () => {
       timerProvider.stopTimer();
-    })
+    }),
   );
 
   context.subscriptions.push(
     vscode.commands.registerCommand("islamic-shoky.timer.refresh", () => {
       timerProvider.refresh();
-    })
+    }),
   );
 
   // Register prayer commands
   context.subscriptions.push(
     vscode.commands.registerCommand("islamic-shoky.prayer.refresh", () => {
       prayerProvider.refresh();
-    })
+    }),
   );
 
   context.subscriptions.push(
     vscode.commands.registerCommand("islamic-shoky.prayer.setLocation", () => {
       prayerProvider.setLocation();
-    })
+    }),
   );
 
   // Register task commands
   context.subscriptions.push(
     vscode.commands.registerCommand("islamic-shoky.tasks.refresh", () => {
       tasksProvider.refreshTasks();
-    })
+    }),
   );
 
   // Listen for configuration changes
@@ -4570,7 +4946,7 @@ function activate(context) {
           timerProvider.refresh();
         }
       }
-    })
+    }),
   );
 
   // The command has been defined in the package.json file
@@ -4583,10 +4959,24 @@ function activate(context) {
 
       // Display a message box to the user
       vscode.window.showInformationMessage("Hello World from islamic shoky!");
-    }
+    },
   );
 
   context.subscriptions.push(disposable);
+
+  const extensionConfig = vscode.workspace.getConfiguration("islamic-shoky");
+  const shouldOpenSidebarOnStartup = extensionConfig.get(
+    "openSidebarOnStartup",
+    true,
+  );
+
+  if (shouldOpenSidebarOnStartup) {
+    setTimeout(() => {
+      vscode.commands.executeCommand(
+        "workbench.view.extension.islamic-shoky-sidebar",
+      );
+    }, 750);
+  }
 }
 
 // This method is called when your extension is deactivated

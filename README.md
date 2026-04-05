@@ -1,6 +1,6 @@
 # Islamic Shoky - Islamic Productivity Extension
 
-[![Version](https://img.shields.io/badge/version-1.2.0-blue.svg)](https://marketplace.visualstudio.com/items?itemName=islamic-shoky.islamic-shoky)
+[![Version](https://img.shields.io/badge/version-1.30-blue.svg)](https://marketplace.visualstudio.com/items?itemName=islamic-shoky.islamic-shoky)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![VS Code](https://img.shields.io/badge/VS_Code-1.103-blue.svg)](https://code.visualstudio.com/)
 
