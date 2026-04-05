@@ -879,14 +879,14 @@ class SidebarProvider {
 					background-color: var(--vscode-button-background);
 					color: var(--vscode-button-foreground);
 					border: none;
-					padding: 8px 12px;
+					padding: 6px 10px;
 					border-radius: 6px;
 					cursor: pointer;
-					font-size: 0.8em;
+					font-size: 0.72em;
 					transition: all 0.3s ease;
 					display: flex;
 					align-items: center;
-					gap: 6px;
+					gap: 4px;
 					box-shadow: 0 2px 4px rgba(0,0,0,0.1);
 				}
 				
@@ -911,8 +911,8 @@ class SidebarProvider {
 				}
 				
 				.section {
-					margin: 20px 0;
-					padding: 20px;
+					margin: 16px 0;
+					padding: 16px;
 					border: 1px solid var(--vscode-panel-border);
 					border-radius: 12px;
 					background-color: var(--vscode-sideBar-background);
@@ -924,6 +924,57 @@ class SidebarProvider {
 					border-color: var(--vscode-textLink-foreground);
 					transform: translateY(-2px);
 					box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+				}
+
+				.tab-bar {
+					display: flex;
+					gap: 4px;
+					padding: 5px;
+					margin: 14px 0 16px;
+					background: linear-gradient(135deg, var(--vscode-sideBar-background) 0%, var(--vscode-editor-background) 100%);
+					border: 1px solid var(--vscode-panel-border);
+					border-radius: 12px;
+					overflow-x: auto;
+					flex-wrap: wrap;
+					align-items: center;
+				}
+
+				.tab-button {
+					flex: 0 0 auto;
+					min-width: 62px;
+					border: none;
+					background: transparent;
+					color: var(--vscode-descriptionForeground);
+					padding: 5px 8px;
+					border-radius: 8px;
+					cursor: pointer;
+					font-size: 0.72em;
+					font-weight: 600;
+					display: flex;
+					align-items: center;
+					justify-content: center;
+					gap: 3px;
+					transition: all 0.25s ease;
+					white-space: nowrap;
+				}
+
+				.tab-button:hover {
+					background-color: var(--vscode-toolbar-hoverBackground);
+					color: var(--vscode-foreground);
+				}
+
+				.tab-button.active {
+					background: linear-gradient(135deg, var(--vscode-button-background) 0%, var(--vscode-textLink-foreground) 100%);
+					color: var(--vscode-button-foreground);
+					box-shadow: 0 6px 18px rgba(0,0,0,0.15);
+				}
+
+				.tab-section {
+					display: none;
+				}
+
+				.tab-section.active {
+					display: block;
 				}
 				
 				.section-title {
@@ -1602,12 +1653,19 @@ class SidebarProvider {
         }" alt="Islamic Shoky Logo">
 				<div class="title">Islamic Shoky</div>
 			</div>
+			<div class="tab-bar" id="tabBar">
+				${config.enablePrayerTimes ? '<button class="tab-button active" type="button" data-tab="prayer">Prayer</button>' : ""}
+				${config.enableAzkar ? '<button class="tab-button" type="button" data-tab="azkar">Azkar</button>' : ""}
+				${config.enablePomodoro ? '<button class="tab-button" type="button" data-tab="pomodoro">Pomodoro</button>' : ""}
+				${config.enableTodoList ? '<button class="tab-button" type="button" data-tab="tasks">Tasks</button>' : ""}
+				${config.enableQuranAudio ? '<button class="tab-button" type="button" data-tab="quran">Quran</button>' : ""}
+			</div>
 			
 			${
         config.enablePrayerTimes
           ? `
 			<!-- Next Azan Section -->
-			<div class="section">
+			<div class="section tab-section tab-prayer active">
 				<div class="section-title">
 					<img src="${
             this._view
@@ -1675,7 +1733,7 @@ class SidebarProvider {
         config.enableAzkar
           ? `
 			<!-- Azkar Section -->
-			<div class="section">
+			<div class="section tab-section tab-azkar${config.enablePrayerTimes ? "" : " active"}">
 				<div class="section-title">
 					<img src="${
             this._view
@@ -1717,7 +1775,7 @@ class SidebarProvider {
         config.enablePomodoro
           ? `
 			<!-- Pomodoro Timer Section -->
-			<div class="section">
+			<div class="section tab-section tab-pomodoro${!config.enablePrayerTimes && !config.enableAzkar ? " active" : ""}">
 				<div class="section-title">
 					<img src="${
             this._view
@@ -1753,7 +1811,7 @@ class SidebarProvider {
         config.enableTodoList
           ? `
 			<!-- Todo List Section -->
-			<div class="section">
+			<div class="section tab-section tab-tasks${!config.enablePrayerTimes && !config.enableAzkar && !config.enablePomodoro ? " active" : ""}">
 				<div class="section-title">
 					<img src="${
             this._view
@@ -1795,7 +1853,7 @@ class SidebarProvider {
         config.enableQuranAudio
           ? `
 			<!-- Quran Audio Section -->
-			<div class="section">
+			<div class="section tab-section tab-quran${!config.enablePrayerTimes && !config.enableAzkar && !config.enablePomodoro && !config.enableTodoList ? " active" : ""}">
 				<div class="section-title">
 					<img src="${
             this._view
@@ -2118,6 +2176,7 @@ class SidebarProvider {
 				updateTimerDisplay();
 				loadTodos();
 				initializeQuranPlayer();
+				initializeTabs();
 				
 				// Load stored location if available
 				const storedLocation = localStorage.getItem('islamicShokyLocation');
@@ -2572,6 +2631,38 @@ class SidebarProvider {
 					} else {
 						locationText.textContent = '🌍 Location not set';
 					}
+				}
+
+				function initializeTabs() {
+					const buttons = Array.from(document.querySelectorAll('.tab-button'));
+					if (buttons.length === 0) {
+						return;
+					}
+
+					const storedTab = localStorage.getItem('islamicShokyActiveTab');
+					const defaultTab = buttons[0].dataset.tab;
+					const initialTab = buttons.some((button) => button.dataset.tab === storedTab)
+						? storedTab
+						: defaultTab;
+
+					buttons.forEach((button) => {
+						button.addEventListener('click', () => switchTab(button.dataset.tab));
+					});
+
+					switchTab(initialTab);
+				}
+
+				function switchTab(tabName) {
+					document.querySelectorAll('.tab-button').forEach((button) => {
+						button.classList.toggle('active', button.dataset.tab === tabName);
+					});
+
+					document.querySelectorAll('.tab-section').forEach((section) => {
+						const isVisible = section.classList.contains('tab-' + tabName);
+						section.classList.toggle('active', isVisible);
+					});
+
+					localStorage.setItem('islamicShokyActiveTab', tabName);
 				}
 				
 				async function fetchPrayerTimes() {
