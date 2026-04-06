@@ -127,6 +127,7 @@ if (!prefersReducedMotion) {
   registerRevealGroup(".install-card", "right");
   registerRevealGroup(".dev-links li", "left");
   registerRevealGroup(".quote-card", "zoom");
+  registerRevealGroup(".support-card", "up");
   registerRevealGroup(".cta-wrap > *", "up");
 } else {
   document.querySelectorAll("[data-reveal]").forEach((el) => {

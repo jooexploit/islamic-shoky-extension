@@ -468,6 +468,92 @@ kbd {
     color: #486368;
 }
 
+.support-section {
+    background:
+        radial-gradient(circle at 14% 20%, rgba(30, 107, 92, 0.14), transparent 36%),
+        radial-gradient(circle at 82% 30%, rgba(181, 127, 47, 0.14), transparent 40%);
+}
+
+.support-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1rem;
+}
+
+.support-card {
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.78));
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1.1rem;
+    box-shadow: 0 16px 30px rgba(18, 43, 48, 0.1);
+    cursor: pointer;
+    transition: border-color 200ms ease, transform 200ms ease, box-shadow 200ms ease;
+}
+
+.support-card:hover,
+.support-card:focus-within {
+    border-color: #2c7469;
+    transform: translateY(-2px);
+    box-shadow: 0 20px 34px rgba(18, 43, 48, 0.14);
+}
+
+.support-card h3 {
+    margin: 0.35rem 0 0;
+}
+
+.support-card p {
+    margin: 0.45rem 0 1rem;
+    color: #385257;
+}
+
+.support-card-donate {
+    border-color: rgba(30, 107, 92, 0.36);
+}
+
+.support-icon {
+    width: 44px;
+    height: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    color: #155247;
+    background: linear-gradient(160deg, rgba(62, 218, 178, 0.28), rgba(30, 107, 92, 0.16));
+    border: 1px solid rgba(30, 107, 92, 0.28);
+}
+
+.support-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+}
+
+.floating-donate {
+    position: fixed;
+    right: 1rem;
+    bottom: 1rem;
+    z-index: 60;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    border-radius: 999px;
+    text-decoration: none;
+    padding: 0.58rem 0.82rem;
+    color: #ffffff;
+    background: linear-gradient(120deg, #1e6b5c, #155247);
+    border: 1px solid rgba(255, 255, 255, 0.42);
+    box-shadow: 0 16px 30px rgba(17, 42, 48, 0.35);
+    font-weight: 700;
+    transition: transform 180ms ease, box-shadow 180ms ease, background-color 180ms ease;
+}
+
+.floating-donate:hover,
+.floating-donate:focus-visible {
+    transform: translateY(-2px);
+    box-shadow: 0 20px 34px rgba(17, 42, 48, 0.45);
+    background: linear-gradient(120deg, #175d50, #114840);
+}
+
 .cta-band {
     background:
         linear-gradient(120deg, rgba(30, 107, 92, 0.95), rgba(17, 68, 78, 0.96)),
@@ -623,7 +709,8 @@ kbd {
 
     .feature-grid,
     .placeholder-grid,
-    .pillars {
+    .pillars,
+    .support-grid {
         grid-template-columns: 1fr;
     }
 
@@ -635,6 +722,12 @@ kbd {
         width: 100%;
         min-height: 180px;
         max-height: 220px;
+    }
+
+    .floating-donate {
+        right: 0.75rem;
+        bottom: 0.75rem;
+        padding: 0.55rem 0.72rem;
     }
 }
 
