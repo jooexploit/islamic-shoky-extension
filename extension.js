@@ -19,10 +19,14 @@ class SidebarProvider {
     this._reminderInterval = null; // 5-minute reminder interval
     this._reminderAudioProcess = null; // Background reminder audio process
     this._goPrayPanel = null; // Urgent prayer reminder panel
+    this._isPrayerLockActive = false;
+    this._prayerLockPrayerName = "";
+    this._prayerLockRevealInterval = null;
     this._stateKeys = {
       prayerEvents: "islamic-shoky.prayerEvents",
       prayerResponses: "islamic-shoky.prayerResponses",
       lastPrayerNotified: "islamic-shoky.lastPrayerNotified",
+      location: "islamic-shoky.location",
     };
   }
 
@@ -73,6 +77,9 @@ class SidebarProvider {
           case "locationUpdated":
             this._forwardLocationToPrayerProvider(message.location);
             break;
+          case "requestSavedLocation":
+            this._sendSavedLocationToWebview(webviewView);
+            break;
           case "getTasksData":
             this._handleTasksDataRequest(webviewView);
             break;
@@ -108,6 +115,9 @@ class SidebarProvider {
             // Stop background audio
             this._stopBackgroundAudio();
             break;
+          case "prayerLockCompleted":
+            this._releasePrayerLock();
+            break;
         }
       },
       undefined,
@@ -137,6 +147,11 @@ class SidebarProvider {
       command: "panelVisibilityChanged",
       visible: webviewView.visible,
     });
+
+    // Hydrate the panel with persisted location as soon as the webview is ready.
+    setTimeout(() => {
+      this._sendSavedLocationToWebview(webviewView);
+    }, 300);
 
     // Restore audio state if there was one
     if (this._currentAudioState) {
@@ -191,9 +206,29 @@ class SidebarProvider {
     });
   }
 
+  _sendSavedLocationToWebview(webviewView) {
+    const savedLocation = this._context.globalState.get(
+      this._stateKeys.location,
+    );
+
+    if (savedLocation) {
+      webviewView.webview.postMessage({
+        command: "savedLocation",
+        location: savedLocation,
+      });
+    }
+  }
+
   _forwardLocationToPrayerProvider(location) {
+    if (!location) {
+      return;
+    }
+
+    // Persist location so prayer data can load on startup without waiting for the webview.
+    this._context.globalState.update(this._stateKeys.location, location);
+
     // Forward location data to the prayer provider
-    if (prayerProvider && location) {
+    if (prayerProvider) {
       prayerProvider.currentLocation = location;
       prayerProvider.refresh();
     }
@@ -1456,101 +1491,311 @@ class SidebarProvider {
 				.quran-container {
 					display: flex;
 					flex-direction: column;
-					gap: 15px;
-				}
-				
-				.quran-selection {
-					display: flex;
-					flex-direction: column;
 					gap: 12px;
+					padding: 12px;
+					border: 1px solid var(--vscode-panel-border);
+					border-radius: 10px;
+					background: var(--vscode-editor-background);
 				}
-				
-				.selection-group {
+
+				.quran-source-row {
 					display: flex;
-					flex-direction: column;
-					gap: 5px;
-				}
-				
-				.selection-group label {
-					font-weight: bold;
-					color: var(--vscode-textLink-foreground);
-					font-size: 0.9em;
-				}
-				
-				.selection-group select {
-					padding: 8px 12px;
-					border: 1px solid var(--vscode-input-border);
-					border-radius: 4px;
-					background-color: var(--vscode-input-background);
-					color: var(--vscode-input-foreground);
-					font-size: 0.9em;
-					cursor: pointer;
-					transition: border-color 0.3s ease;
-				}
-				
-				.selection-group select:focus {
-					outline: none;
-					border-color: var(--vscode-focusBorder);
-				}
-				
-				.audio-controls {
-					display: flex;
-					gap: 10px;
-					justify-content: center;
+					gap: 8px;
+					align-items: center;
 					flex-wrap: wrap;
-					margin-top: 15px;
 				}
-				
-				.audio-button {
-					background-color: var(--vscode-button-background);
-					color: var(--vscode-button-foreground);
-					border: none;
-					padding: 10px 16px;
+
+				.quran-source-row label {
+					font-size: 0.85em;
+					min-width: 48px;
+				}
+
+				.quran-source-row select,
+				.selection-group select {
+					width: 100%;
+					flex: 1 1 180px;
+					padding: 8px 10px;
+					border: 1px solid var(--vscode-input-border);
 					border-radius: 6px;
-					cursor: pointer;
-					font-size: 0.9em;
-					font-weight: bold;
-					transition: all 0.3s ease;
-					min-width: 80px;
-					display: flex;
+					background: var(--vscode-input-background);
+					color: var(--vscode-input-foreground);
+				}
+
+				.audio-source-badge {
+					display: inline-flex;
+					align-items: center;
+					gap: 6px;
+					padding: 6px 10px;
+					border-radius: 999px;
+					font-size: 0.75em;
+					font-weight: 700;
+					letter-spacing: 0.02em;
+					background: color-mix(in srgb, var(--vscode-button-background) 85%, black 15%);
+					color: var(--vscode-button-foreground);
+				}
+
+				.audio-source-badge.offline {
+					background: color-mix(in srgb, var(--vscode-terminal-ansiGreen) 28%, var(--vscode-editor-background) 72%);
+				}
+
+				.mode-icon {
+					display: inline-flex;
 					align-items: center;
 					justify-content: center;
-					gap: 5px;
+					width: 16px;
+					height: 16px;
 				}
-				
+
+				.mode-icon svg {
+					width: 16px;
+					height: 16px;
+					stroke: currentColor;
+					fill: none;
+				}
+
+				.quran-selection {
+					display: grid;
+					gap: 8px;
+				}
+
+				.selection-group {
+					display: grid;
+					gap: 4px;
+				}
+
+				.selection-group label {
+					font-size: 0.8em;
+					color: var(--vscode-descriptionForeground);
+				}
+
+				.local-source-actions {
+					display: grid;
+					grid-template-columns: repeat(2, minmax(0, 1fr));
+					gap: 8px;
+				}
+
+				.local-button,
+				.audio-button {
+					padding: 8px 12px;
+					border: 1px solid var(--vscode-button-border, var(--vscode-panel-border));
+					border-radius: 6px;
+					background: var(--vscode-button-background);
+					color: var(--vscode-button-foreground);
+					cursor: pointer;
+					font-size: 0.82em;
+					font-weight: 600;
+					display: inline-flex;
+					align-items: center;
+					justify-content: center;
+					gap: 6px;
+				}
+
+				.local-button:hover,
 				.audio-button:hover:not(:disabled) {
-					background-color: var(--vscode-button-hoverBackground);
+					background: var(--vscode-button-hoverBackground);
+				}
+
+				.audio-controls {
+					display: flex;
+					flex-wrap: wrap;
+					justify-content: center;
+					align-items: center;
+					gap: 8px;
+				}
+
+				.audio-progress {
+					display: grid;
+					grid-template-columns: 42px 1fr 42px;
+					align-items: center;
+					gap: 8px;
+					margin-top: 6px;
+				}
+
+				.audio-time {
+					font-size: 0.75em;
+					color: var(--vscode-descriptionForeground);
+					font-variant-numeric: tabular-nums;
+				}
+
+				#audioSeek {
+					width: 100%;
+					height: 4px;
+					appearance: none;
+					background: color-mix(in srgb, var(--vscode-input-border) 65%, var(--vscode-editor-background) 35%);
+					border-radius: 999px;
+					cursor: pointer;
+				}
+
+				#audioSeek::-webkit-slider-thumb {
+					appearance: none;
+					width: 14px;
+					height: 14px;
+					border-radius: 50%;
+					background: var(--vscode-button-background);
+					border: 1px solid var(--vscode-button-border, var(--vscode-panel-border));
+				}
+
+				#audioSeek::-moz-range-thumb {
+					width: 14px;
+					height: 14px;
+					border-radius: 50%;
+					background: var(--vscode-button-background);
+					border: 1px solid var(--vscode-button-border, var(--vscode-panel-border));
+				}
+
+				.audio-icon-button {
+					width: 36px;
+					height: 36px;
+					display: inline-flex;
+					align-items: center;
+					justify-content: center;
+					border: 1px solid var(--vscode-button-border, var(--vscode-panel-border));
+					border-radius: 999px;
+					background: var(--vscode-button-secondaryBackground);
+					color: var(--vscode-button-secondaryForeground);
+					cursor: pointer;
+					transition: background-color 180ms ease, transform 180ms ease, border-color 180ms ease;
+				}
+
+				.audio-icon-button.play {
+					width: 44px;
+					height: 44px;
+					background: var(--vscode-button-background);
+					color: var(--vscode-button-foreground);
+				}
+
+				.audio-icon-button.repeat-active {
+					border-color: var(--vscode-focusBorder);
+					box-shadow: 0 0 0 1px color-mix(in srgb, var(--vscode-focusBorder) 45%, transparent 55%);
+				}
+
+				.audio-icon-button:hover:not(:disabled) {
+					background: var(--vscode-button-hoverBackground);
 					transform: translateY(-1px);
 				}
-				
-				.audio-button:disabled {
-					background-color: var(--vscode-button-secondaryBackground);
-					color: var(--vscode-descriptionForeground);
-					cursor: not-allowed;
+
+				.audio-icon-button:focus-visible {
+					outline: 1px solid var(--vscode-focusBorder);
+					outline-offset: 1px;
+				}
+
+				.audio-icon-button:disabled {
 					opacity: 0.6;
+					cursor: not-allowed;
+					transform: none;
 				}
-				
+
+				.audio-icon-button svg {
+					width: 17px;
+					height: 17px;
+					fill: none;
+					stroke: currentColor;
+					stroke-width: 1.8;
+					stroke-linecap: round;
+					stroke-linejoin: round;
+				}
+
+				.audio-icon-button.play svg {
+					width: 20px;
+					height: 20px;
+				}
+
+				.sr-only {
+					position: absolute;
+					width: 1px;
+					height: 1px;
+					padding: 0;
+					margin: -1px;
+					overflow: hidden;
+					clip: rect(0, 0, 0, 0);
+					white-space: nowrap;
+					border: 0;
+				}
+
+				.audio-button:disabled {
+					opacity: 0.6;
+					cursor: not-allowed;
+					background: var(--vscode-button-secondaryBackground);
+					color: var(--vscode-descriptionForeground);
+				}
+
 				.audio-info {
-					margin-top: 15px;
-					padding: 12px;
-					background-color: var(--vscode-textBlockQuote-background);
+					padding: 10px;
 					border-radius: 6px;
-					border-left: 4px solid var(--vscode-textLink-foreground);
+					background: var(--vscode-textBlockQuote-background);
 				}
-				
+
+				.audio-state-chip {
+					display: inline-block;
+					padding: 2px 8px;
+					border-radius: 999px;
+					font-size: 0.72em;
+					font-weight: 700;
+					background: var(--vscode-editorInfo-background);
+					color: var(--vscode-editorInfo-foreground);
+					margin-bottom: 6px;
+				}
+
 				.current-playing {
-					text-align: center;
-					font-size: 0.9em;
+					font-size: 0.82em;
 					color: var(--vscode-editor-foreground);
+					line-height: 1.5;
 				}
-				
-				.current-playing strong {
-					color: var(--vscode-textLink-activeForeground);
+
+				#audioModeText {
+					display: inline-block;
+					margin-top: 4px;
+					color: var(--vscode-descriptionForeground);
 				}
-				
+
 				#quranAudio {
-					border-radius: 6px;
+					width: 100%;
+					margin-top: 2px;
+					border-radius: 8px;
 					background-color: var(--vscode-panel-background);
+				}
+
+				.quran-online-fields,
+				.quran-local-fields {
+					display: grid;
+					gap: 8px;
+				}
+
+				@media (max-width: 460px) {
+					.quran-container {
+						padding: 10px;
+					}
+
+					.audio-controls {
+						justify-content: space-between;
+					}
+
+					.local-source-actions {
+						grid-template-columns: 1fr;
+					}
+
+					.audio-progress {
+						grid-template-columns: 40px 1fr 40px;
+						gap: 6px;
+					}
+
+					.audio-icon-button {
+						width: 34px;
+						height: 34px;
+					}
+
+					.audio-icon-button.play {
+						width: 40px;
+						height: 40px;
+					}
+				}
+
+				@media (prefers-reduced-motion: reduce) {
+					.audio-icon-button,
+					.loading {
+						transition: none !important;
+						animation: none !important;
+					}
 				}
 				
 				/* Loading animation for audio controls */
@@ -1869,80 +2114,123 @@ class SidebarProvider {
 					Quran Audio Player
 				</div>
 				<div class="quran-container">
-					<div class="quran-selection">
-						<div class="selection-group">
-							<label for="surahSelect">Select Surah:</label>
-							<select id="surahSelect" onchange="handleSurahChange()">
-								<option value="">Choose a Surah...</option>
-							</select>
+					<div class="quran-source-row">
+						<label for="audioSourceSelect">Source</label>
+						<select id="audioSourceSelect" onchange="handleAudioSourceChange()">
+							<option value="online" selected>Online</option>
+							<option value="local">My Files</option>
+						</select>
+						<div class="audio-source-badge" id="audioSourceBadge" aria-live="polite">
+							<span class="mode-icon" id="audioSourceBadgeIcon" aria-hidden="true">
+								<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+									<circle cx="12" cy="12" r="9"></circle>
+									<path d="M3 12h18"></path>
+									<path d="M12 3a14.5 14.5 0 0 1 0 18"></path>
+									<path d="M12 3a14.5 14.5 0 0 0 0 18"></path>
+								</svg>
+							</span>
+							<span id="audioSourceBadgeText">Online</span>
 						</div>
-						
+					</div>
+
+					<div class="quran-online-fields" id="quranOnlineFields">
+						<div class="quran-selection">
+							<div class="selection-group">
+								<label for="surahSelect">Surah</label>
+								<select id="surahSelect" onchange="handleSurahChange()">
+									<option value="">Choose a Surah</option>
+								</select>
+							</div>
+
+							<div class="selection-group">
+								<label for="reciterSelect">Reciter</label>
+								<select id="reciterSelect">
+									<option value="mishari">Mishary Rashid Al-Afasy</option>
+									<option value="maher">Maher Al-Muaiqly</option>
+									<option value="sudais">Abdul Rahman Al-Sudais</option>
+									<option value="shuraim">Saud Al-Shuraim</option>
+									<option value="ghamdi">Saad Al-Ghamdi</option>
+									<option value="husary">Mahmoud Khalil Al-Husary</option>
+								</select>
+							</div>
+						</div>
+					</div>
+
+					<div class="quran-local-fields" id="quranLocalFields" style="display: none;">
+						<div class="local-source-actions">
+							<button class="local-button" type="button" onclick="openLocalFilePicker()">
+								<span class="mode-icon" aria-hidden="true">
+									<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16v12H4z"></path><path d="M9 3h6v3H9z"></path></svg>
+								</span>
+								Open File
+							</button>
+							<button class="local-button" type="button" onclick="openLocalFolderPicker()">
+								<span class="mode-icon" aria-hidden="true">
+									<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h7l2 2h9v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg>
+								</span>
+								Open Folder
+							</button>
+						</div>
+						<input id="localFileInput" type="file" accept="audio/*" multiple style="display: none;" onchange="handleLocalFiles(event)">
+						<input id="localFolderInput" type="file" accept="audio/*" multiple webkitdirectory directory style="display: none;" onchange="handleLocalFiles(event)">
 						<div class="selection-group">
-							<label for="reciterSelect">Select Reciter:</label>
-							<select id="reciterSelect">
-								<option value="mishari">Mishary Rashid Al-Afasy</option>
-								<option value="maher">Maher Al-Muaiqly</option>
-								<option value="sudais">Abdul Rahman Al-Sudais</option>
-								<option value="shuraim">Saud Al-Shuraim</option>
-								<option value="ghamdi">Saad Al-Ghamdi</option>
-								<option value="husary">Mahmoud Khalil Al-Husary</option>
+							<label for="localTrackSelect">Track</label>
+							<select id="localTrackSelect" onchange="handleSurahChange()" disabled>
+								<option value="">Open a file or folder</option>
 							</select>
 						</div>
 					</div>
 					
-					<div class="audio-controls">
-						<button class="audio-button" id="playBtn" onclick="playQuranAudio()" disabled>
-							<img src="${
-                this._view
-                  ? this._view.webview.asWebviewUri(
-                      vscode.Uri.joinPath(
-                        this._context.extensionUri,
-                        "icons",
-                        "play.svg",
-                      ),
-                    )
-                  : ""
-              }" alt="Play" class="button-icon">
-							<span id="playBtnText">Play</span>
+					<div class="audio-progress" id="audioProgressWrap">
+						<span id="audioCurrentTime" class="audio-time">0:00</span>
+						<input
+							type="range"
+							id="audioSeek"
+							min="0"
+							max="100"
+							value="0"
+							oninput="seekAudioPosition(event)"
+							aria-label="Seek audio position"
+						>
+						<span id="audioDuration" class="audio-time">0:00</span>
+					</div>
+
+					<div class="audio-controls" role="group" aria-label="Audio playback controls">
+						<button class="audio-icon-button" id="prevBtn" type="button" onclick="playPreviousTrack()" title="Previous" disabled>
+							<span class="sr-only">Previous</span>
+							<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6v12"></path><path d="m18 7-8 5 8 5z"></path></svg>
 						</button>
-						<button class="audio-button" id="stopBtn" onclick="stopQuranAudio()" disabled>
-							<img src="${
-                this._view
-                  ? this._view.webview.asWebviewUri(
-                      vscode.Uri.joinPath(
-                        this._context.extensionUri,
-                        "icons",
-                        "stop.svg",
-                      ),
-                    )
-                  : ""
-              }" alt="Stop" class="button-icon">
-							Stop
+						<button class="audio-icon-button play" id="playBtn" type="button" onclick="togglePlayPause()" disabled title="Play or pause">
+							<span class="sr-only" id="playBtnText">Play</span>
+							<svg id="playIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="m8 6 10 6-10 6z"></path></svg>
 						</button>
-						<button class="audio-button" id="downloadBtn" onclick="downloadQuranAudio()" disabled>
-							<img src="${
-                this._view
-                  ? this._view.webview.asWebviewUri(
-                      vscode.Uri.joinPath(
-                        this._context.extensionUri,
-                        "icons",
-                        "download.svg",
-                      ),
-                    )
-                  : ""
-              }" alt="Download" class="button-icon">
-							Download
+						<button class="audio-icon-button" id="nextBtn" type="button" onclick="playNextTrack()" title="Next" disabled>
+							<span class="sr-only">Next</span>
+							<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6v12"></path><path d="m6 7 8 5-8 5z"></path></svg>
+						</button>
+						<button class="audio-icon-button" id="repeatBtn" type="button" onclick="toggleRepeatMode()" title="Repeat mode">
+							<span class="sr-only">Repeat mode</span>
+							<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 2l4 4-4 4"></path><path d="M3 11V9a3 3 0 0 1 3-3h15"></path><path d="M7 22l-4-4 4-4"></path><path d="M21 13v2a3 3 0 0 1-3 3H3"></path></svg>
+						</button>
+						<button class="audio-icon-button" id="stopBtn" type="button" onclick="stopQuranAudio()" disabled title="Stop">
+							<span class="sr-only">Stop</span>
+							<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10"></rect></svg>
+						</button>
+						<button class="audio-icon-button" id="downloadBtn" type="button" onclick="downloadQuranAudio()" disabled title="Download">
+							<span class="sr-only">Download</span>
+							<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12"></path><path d="m7 10 5 5 5-5"></path><path d="M4 19h16"></path></svg>
 						</button>
 					</div>
 					
 					<div class="audio-info" id="audioInfo">
+						<div class="audio-state-chip" id="audioStateChip">Ready</div>
 						<div class="current-playing" id="currentPlaying" style="display: none;">
-							<strong>Now Playing:</strong> <span id="playingText"></span>
-							<br><small id="audioModeText">🔊 Audio playing in background - will continue even when switching panels</small>
+							<strong>Now Playing</strong>: <span id="playingText"></span>
+							<br><small id="audioModeText">Audio plays in background and continues when you switch tabs.</small>
 						</div>
 					</div>
 					
-					<audio id="quranAudio" controls style="width: 100%; margin-top: 15px; display: none;">
+					<audio id="quranAudio" style="display: none;">
 						Your browser does not support the audio element.
 					</audio>
 				</div>
@@ -2169,6 +2457,8 @@ class SidebarProvider {
 				let currentAudioUrl = null;
 				let isPlaying = false;
 				let quranData = null;
+				let localFolderAutoplayEnabled = false;
+				let repeatMode = 'off';
 				
 				// Initialize
 				initializeAzkar();
@@ -2177,19 +2467,40 @@ class SidebarProvider {
 				loadTodos();
 				initializeQuranPlayer();
 				initializeTabs();
-				
-				// Load stored location if available
+
+				// Request persisted location from extension storage (single source of truth).
+				vscode.postMessage({
+					command: 'requestSavedLocation'
+				});
+
+				// Fallback: load from webview local storage and backfill extension storage.
 				const storedLocation = localStorage.getItem('islamicShokyLocation');
 				if (storedLocation) {
-					userLocation = JSON.parse(storedLocation);
-					updateLocationDisplay();
-					fetchPrayerTimes();
+					try {
+						userLocation = JSON.parse(storedLocation);
+						updateLocationDisplay();
+						fetchPrayerTimes();
+						vscode.postMessage({
+							command: 'locationUpdated',
+							location: userLocation
+						});
+					} catch (error) {
+						console.error('Failed to parse stored location:', error);
+					}
 				}
 				
 				// Listen for messages from extension
 				window.addEventListener('message', event => {
 					const message = event.data;
 					switch (message.command) {
+						case 'savedLocation':
+							if (message.location) {
+								userLocation = message.location;
+								updateLocationDisplay();
+								fetchPrayerTimes();
+								localStorage.setItem('islamicShokyLocation', JSON.stringify(userLocation));
+							}
+							break;
 						case 'enableIPLocation':
 							requestIPLocation();
 							break;
@@ -2339,26 +2650,41 @@ class SidebarProvider {
 						case 'audioEnded':
 							// Audio playback ended
 							isPlaying = false;
-							const playBtnText = document.getElementById('playBtnText');
 							const stopBtn = document.getElementById('stopBtn');
 							const currentPlaying = document.getElementById('currentPlaying');
+							const audioStateChip = document.getElementById('audioStateChip');
+							const sourceSelect = document.getElementById('audioSourceSelect');
+							const isLocalSource = sourceSelect && sourceSelect.value === 'local';
 							
-							if (playBtnText) playBtnText.textContent = 'Play';
+							if (!isLocalSource && repeatMode !== 'off') {
+								updatePlayIcon(false);
+								if (stopBtn) stopBtn.disabled = true;
+								if (currentPlaying) currentPlaying.style.display = 'none';
+								if (audioStateChip) audioStateChip.textContent = 'Repeating';
+								setTimeout(() => {
+									playQuranAudio();
+								}, 250);
+								break;
+							}
+
+							updatePlayIcon(false);
 							if (stopBtn) stopBtn.disabled = true;
 							if (currentPlaying) currentPlaying.style.display = 'none';
+							if (audioStateChip) audioStateChip.textContent = 'Finished';
 							
 							showQuranMessage('Audio playback completed.');
 							break;
 						case 'audioStopped':
 							// Audio was stopped
 							isPlaying = false;
-							const playBtn2 = document.getElementById('playBtnText');
 							const stopBtn2 = document.getElementById('stopBtn');
 							const currentPlaying2 = document.getElementById('currentPlaying');
+							const audioStateChip2 = document.getElementById('audioStateChip');
 							
-							if (playBtn2) playBtn2.textContent = 'Play';
+							updatePlayIcon(false);
 							if (stopBtn2) stopBtn2.disabled = true;
 							if (currentPlaying2) currentPlaying2.style.display = 'none';
+							if (audioStateChip2) audioStateChip2.textContent = 'Stopped';
 							break;
 						case 'playWebviewAudio':
 							// Fallback to webview audio when system audio fails
@@ -2368,14 +2694,15 @@ class SidebarProvider {
 							// Update audio status from background
 							if (message.isPlaying !== isPlaying) {
 								isPlaying = message.isPlaying;
-								const playBtnText3 = document.getElementById('playBtnText');
 								const stopBtn3 = document.getElementById('stopBtn');
+								const audioStateChip3 = document.getElementById('audioStateChip');
 								
-								if (playBtnText3) {
-									playBtnText3.textContent = isPlaying ? 'Stop' : 'Play';
-								}
+								updatePlayIcon(isPlaying);
 								if (stopBtn3) {
 									stopBtn3.disabled = !isPlaying;
+								}
+								if (audioStateChip3) {
+									audioStateChip3.textContent = isPlaying ? 'Playing' : 'Selected';
 								}
 							}
 							break;
@@ -3425,7 +3752,7 @@ class SidebarProvider {
 						const playingTextSpan = document.getElementById('playingText');
 						
 						audio.src = audioUrl;
-						audio.style.display = 'block';
+						audio.style.display = 'none';
 						currentPlayingDiv.style.display = 'block';
 						playingTextSpan.textContent = playingText;
 						
@@ -3495,32 +3822,52 @@ class SidebarProvider {
 					const playBtn = document.getElementById('playBtn');
 					const stopBtn = document.getElementById('stopBtn');
 					const downloadBtn = document.getElementById('downloadBtn');
-					const playBtnText = document.getElementById('playBtnText');
+					const audioStateChip = document.getElementById('audioStateChip');
+					const sourceSelect = document.getElementById('audioSourceSelect');
+					const localTrackSelect = document.getElementById('localTrackSelect');
+					const usingLocal = sourceSelect && sourceSelect.value === 'local';
+					const hasLocalSelection = localTrackSelect && localTrackSelect.value !== '';
+
+					if (!playBtn || !stopBtn || !downloadBtn) return;
 					
-					const hasSelection = getSelectionId() !== null;
+					const hasSelection = usingLocal ? hasLocalSelection : getSelectionId() !== null;
 					
-					playBtn.disabled = !hasSelection || isPlaying;
+					playBtn.disabled = !hasSelection && !isPlaying;
 					stopBtn.disabled = !isPlaying;
-					downloadBtn.disabled = !currentAudioUrl;
+					downloadBtn.disabled = usingLocal ? !hasLocalSelection : !hasSelection;
 					
 					if (isPlaying) {
-						playBtnText.textContent = '⏸️ Playing...';
+						updatePlayIcon(true);
+						if (audioStateChip) audioStateChip.textContent = 'Playing';
 					} else {
-						playBtnText.textContent = '▶️ Play';
+						updatePlayIcon(false);
+						if (audioStateChip) {
+							audioStateChip.textContent = hasSelection ? 'Selected' : 'Ready';
+						}
 					}
 				}
 				
 				function getSelectionId() {
-					const selectionType = document.getElementById('selectionType').value;
-					
-					if (selectionType === 'surah') {
-						return document.getElementById('surahSelect').value;
-					} else if (selectionType === 'juz') {
-						return document.getElementById('juzSelect').value;
-					} else if (selectionType === 'hizb') {
-						return document.getElementById('hizbSelect').value;
+					const selectionTypeEl = document.getElementById('selectionType');
+					if (!selectionTypeEl) {
+						const surahEl = document.getElementById('surahSelect');
+						return surahEl && surahEl.value ? surahEl.value : null;
 					}
-					
+
+					const selectionType = selectionTypeEl.value;
+					if (selectionType === 'surah') {
+						const surahEl = document.getElementById('surahSelect');
+						return surahEl && surahEl.value ? surahEl.value : null;
+					}
+					if (selectionType === 'juz') {
+						const juzEl = document.getElementById('juzSelect');
+						return juzEl && juzEl.value ? juzEl.value : null;
+					}
+					if (selectionType === 'hizb') {
+						const hizbEl = document.getElementById('hizbSelect');
+						return hizbEl && hizbEl.value ? hizbEl.value : null;
+					}
+
 					return null;
 				}
 				
@@ -3598,14 +3945,53 @@ class SidebarProvider {
 					const audio = document.getElementById('quranAudio');
 					if (audio) {
 						audio.addEventListener('ended', function() {
+							const sourceSelect = document.getElementById('audioSourceSelect');
+							const localTrackSelect = document.getElementById('localTrackSelect');
+							const localFiles = window.localQuranAudioFiles || [];
+								const isLocalPlayback = sourceSelect && sourceSelect.value === 'local';
+								const hasLocalSelection = localTrackSelect && localTrackSelect.value !== '';
+
+								if (isLocalPlayback && hasLocalSelection) {
+									if (repeatMode === 'one') {
+										playQuranAudio();
+										return;
+									}
+
+									const currentIndex = Number(localTrackSelect.value);
+									const nextIndex = currentIndex + 1;
+									if (nextIndex < localFiles.length) {
+										localTrackSelect.value = String(nextIndex);
+										handleSurahChange();
+										playQuranAudio();
+										return;
+									}
+
+									if (repeatMode === 'all' && localFiles.length > 0) {
+										localTrackSelect.value = '0';
+										handleSurahChange();
+										playQuranAudio();
+										return;
+									}
+
+									if (localFolderAutoplayEnabled) {
+										localFolderAutoplayEnabled = false;
+									}
+								}
+
 							isPlaying = false;
+								updatePlayIcon(false);
 							updatePlayButton();
+								updateAudioProgressUI();
 							showQuranMessage('Audio playback completed.');
 						});
+
+							audio.addEventListener('timeupdate', updateAudioProgressUI);
+							audio.addEventListener('loadedmetadata', updateAudioProgressUI);
 						
 						audio.addEventListener('error', function() {
 							isPlaying = false;
 							setLoadingState(false);
+								updatePlayIcon(false);
 							updatePlayButton();
 							showQuranMessage('Error loading audio. Please try again.');
 						});
@@ -3615,6 +4001,10 @@ class SidebarProvider {
 				function initializeQuranPlayer() {
 					if (extensionConfig.enableQuranAudio) {
 						loadSurahs();
+						handleAudioSourceChange();
+						updateRepeatButtonUI();
+						updatePlayIcon(false);
+						updateAudioProgressUI();
 					}
 				}
 				
@@ -3751,26 +4141,339 @@ class SidebarProvider {
 				
 				function handleSurahChange() {
 					const surahSelect = document.getElementById('surahSelect');
+					const localTrackSelect = document.getElementById('localTrackSelect');
+					const sourceSelect = document.getElementById('audioSourceSelect');
 					const playBtn = document.getElementById('playBtn');
+					const prevBtn = document.getElementById('prevBtn');
+					const nextBtn = document.getElementById('nextBtn');
 					const downloadBtn = document.getElementById('downloadBtn');
+					const audioStateChip = document.getElementById('audioStateChip');
+					const usingLocal = sourceSelect && sourceSelect.value === 'local';
+					const hasSelection = usingLocal
+						? (localTrackSelect && localTrackSelect.value !== '')
+						: (surahSelect && surahSelect.value !== '');
 					
-					if (surahSelect.value) {
+					if (hasSelection) {
 						playBtn.disabled = false;
+						if (prevBtn) prevBtn.disabled = false;
+						if (nextBtn) nextBtn.disabled = false;
 						downloadBtn.disabled = false;
+						if (audioStateChip && !isPlaying) {
+							audioStateChip.textContent = 'Selected';
+						}
 					} else {
 						playBtn.disabled = true;
+						if (prevBtn) prevBtn.disabled = true;
+						if (nextBtn) nextBtn.disabled = true;
 						downloadBtn.disabled = true;
+						if (audioStateChip && !isPlaying) {
+							audioStateChip.textContent = 'Ready';
+						}
 					}
+				}
+
+				function handleAudioSourceChange() {
+					const sourceSelect = document.getElementById('audioSourceSelect');
+					const onlineFields = document.getElementById('quranOnlineFields');
+					const localFields = document.getElementById('quranLocalFields');
+					const audioModeText = document.getElementById('audioModeText');
+					const sourceBadge = document.getElementById('audioSourceBadge');
+					const sourceBadgeText = document.getElementById('audioSourceBadgeText');
+					const sourceBadgeIcon = document.getElementById('audioSourceBadgeIcon');
+
+					if (!sourceSelect || !onlineFields || !localFields) return;
+
+					const usingLocal = sourceSelect.value === 'local';
+					onlineFields.style.display = usingLocal ? 'none' : 'grid';
+					localFields.style.display = usingLocal ? 'grid' : 'none';
+					if (sourceBadge) {
+						sourceBadge.classList.toggle('offline', usingLocal);
+					}
+					if (sourceBadgeText) {
+						sourceBadgeText.textContent = usingLocal ? 'Offline' : 'Online';
+					}
+					if (sourceBadgeIcon) {
+						sourceBadgeIcon.innerHTML = usingLocal
+							? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h7l2 2h9v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg>'
+							: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18"></path><path d="M12 3a14.5 14.5 0 0 1 0 18"></path><path d="M12 3a14.5 14.5 0 0 0 0 18"></path></svg>';
+					}
+					if (audioModeText) {
+						audioModeText.textContent = usingLocal
+							? 'Playing from your local files.'
+							: 'Audio plays in background and continues when you switch tabs.';
+					}
+					handleSurahChange();
+				}
+
+				function openLocalFilePicker() {
+					const input = document.getElementById('localFileInput');
+					if (input) input.click();
+				}
+
+				function openLocalFolderPicker() {
+					const input = document.getElementById('localFolderInput');
+					if (input) input.click();
+				}
+
+				function handleLocalFiles(event) {
+					const files = Array.from(event.target.files || []);
+					const localTrackSelect = document.getElementById('localTrackSelect');
+					const sourceSelect = document.getElementById('audioSourceSelect');
+					if (!localTrackSelect) return;
+
+					const pickedFolder = event && event.target && event.target.id === 'localFolderInput';
+					localFolderAutoplayEnabled = Boolean(pickedFolder);
+					if (sourceSelect && sourceSelect.value !== 'local') {
+						sourceSelect.value = 'local';
+						handleAudioSourceChange();
+					}
+
+					const audioFiles = files.filter((file) => (file.type || '').startsWith('audio/'));
+					if (audioFiles.length === 0) {
+						showQuranMessage('No audio files found.');
+						localFolderAutoplayEnabled = false;
+						return;
+					}
+
+					audioFiles.sort((a, b) => {
+						const aName = (a.webkitRelativePath || a.name || '').toLowerCase();
+						const bName = (b.webkitRelativePath || b.name || '').toLowerCase();
+						return aName.localeCompare(bName, undefined, { numeric: true });
+					});
+
+					window.localQuranAudioFiles = audioFiles;
+					localTrackSelect.innerHTML = '<option value="">Choose a track</option>';
+					audioFiles.forEach((file, index) => {
+						const option = document.createElement('option');
+						option.value = String(index);
+						option.textContent = file.webkitRelativePath || file.name;
+						localTrackSelect.appendChild(option);
+					});
+
+					localTrackSelect.disabled = false;
+					if (pickedFolder) {
+						localTrackSelect.value = '0';
+					}
+					showQuranMessage(
+						audioFiles.length === 1
+							? '1 audio file loaded.'
+							: (audioFiles.length + ' audio files loaded.')
+					);
+					handleSurahChange();
+
+					if (pickedFolder) {
+						playQuranAudio();
+					}
+				}
+
+				function formatAudioTime(seconds) {
+					if (!Number.isFinite(seconds) || seconds < 0) {
+						return '0:00';
+					}
+					const mins = Math.floor(seconds / 60);
+					const secs = Math.floor(seconds % 60);
+					return mins + ':' + String(secs).padStart(2, '0');
+				}
+
+				function updateAudioProgressUI() {
+					const audio = document.getElementById('quranAudio');
+					const seek = document.getElementById('audioSeek');
+					const currentTime = document.getElementById('audioCurrentTime');
+					const duration = document.getElementById('audioDuration');
+					if (!audio || !seek || !currentTime || !duration) return;
+
+					const current = Number.isFinite(audio.currentTime) ? audio.currentTime : 0;
+					const total = Number.isFinite(audio.duration) ? audio.duration : 0;
+					const progress = total > 0 ? Math.min(100, (current / total) * 100) : 0;
+
+					seek.value = String(progress);
+					currentTime.textContent = formatAudioTime(current);
+					duration.textContent = formatAudioTime(total);
+				}
+
+				function seekAudioPosition(event) {
+					const audio = document.getElementById('quranAudio');
+					if (!audio || !Number.isFinite(audio.duration) || audio.duration <= 0) return;
+
+					const percent = Number(event.target.value || 0);
+					audio.currentTime = (percent / 100) * audio.duration;
+				}
+
+				function updatePlayIcon(playing) {
+					const icon = document.getElementById('playIcon');
+					const text = document.getElementById('playBtnText');
+					if (text) text.textContent = playing ? 'Pause' : 'Play';
+					if (!icon) return;
+
+					icon.innerHTML = playing
+						? '<path d="M9 6h2v12H9z"></path><path d="M13 6h2v12h-2z"></path>'
+						: '<path d="m8 6 10 6-10 6z"></path>';
+				}
+
+				function updateRepeatButtonUI() {
+					const repeatBtn = document.getElementById('repeatBtn');
+					if (!repeatBtn) return;
+
+					repeatBtn.classList.toggle('repeat-active', repeatMode !== 'off');
+					repeatBtn.title = repeatMode === 'one'
+						? 'Repeat one'
+						: (repeatMode === 'all' ? 'Repeat all' : 'Repeat off');
+				}
+
+				function toggleRepeatMode() {
+					if (repeatMode === 'off') {
+						repeatMode = 'all';
+						showQuranMessage('Repeat: all tracks.');
+					} else if (repeatMode === 'all') {
+						repeatMode = 'one';
+						showQuranMessage('Repeat: current track.');
+					} else {
+						repeatMode = 'off';
+						showQuranMessage('Repeat: off.');
+					}
+					updateRepeatButtonUI();
+				}
+
+				function togglePlayPause() {
+					const sourceSelect = document.getElementById('audioSourceSelect');
+					const usingLocal = sourceSelect && sourceSelect.value === 'local';
+					const audio = document.getElementById('quranAudio');
+
+					if (isPlaying) {
+						if (usingLocal && audio && !audio.paused) {
+							audio.pause();
+							isPlaying = false;
+							updatePlayIcon(false);
+							const audioStateChip = document.getElementById('audioStateChip');
+							if (audioStateChip) audioStateChip.textContent = 'Paused';
+							showQuranMessage('Paused.');
+							return;
+						}
+
+						stopQuranAudio();
+						return;
+					}
+
+					playQuranAudio();
+				}
+
+				function playPreviousTrack() {
+					const sourceSelect = document.getElementById('audioSourceSelect');
+					const usingLocal = sourceSelect && sourceSelect.value === 'local';
+					if (usingLocal) {
+						const localTrackSelect = document.getElementById('localTrackSelect');
+						const localFiles = window.localQuranAudioFiles || [];
+						if (!localTrackSelect || localTrackSelect.value === '' || localFiles.length === 0) {
+							return;
+						}
+						const currentIndex = Number(localTrackSelect.value);
+						if (currentIndex <= 0) {
+							if (repeatMode === 'all') {
+								localTrackSelect.value = String(localFiles.length - 1);
+							} else {
+								return;
+							}
+						} else {
+							localTrackSelect.value = String(currentIndex - 1);
+						}
+						handleSurahChange();
+						playQuranAudio();
+						return;
+					}
+
+					const surahSelect = document.getElementById('surahSelect');
+					if (!surahSelect || !surahSelect.value) return;
+					const previous = Math.max(1, Number(surahSelect.value) - 1);
+					surahSelect.value = String(previous);
+					handleSurahChange();
+					playQuranAudio();
+				}
+
+				function playNextTrack() {
+					const sourceSelect = document.getElementById('audioSourceSelect');
+					const usingLocal = sourceSelect && sourceSelect.value === 'local';
+					if (usingLocal) {
+						const localTrackSelect = document.getElementById('localTrackSelect');
+						const localFiles = window.localQuranAudioFiles || [];
+						if (!localTrackSelect || localTrackSelect.value === '' || localFiles.length === 0) {
+							return;
+						}
+						const currentIndex = Number(localTrackSelect.value);
+						const nextIndex = currentIndex + 1;
+						if (nextIndex >= localFiles.length) {
+							if (repeatMode === 'all') {
+								localTrackSelect.value = '0';
+							} else {
+								return;
+							}
+						} else {
+							localTrackSelect.value = String(nextIndex);
+						}
+						handleSurahChange();
+						playQuranAudio();
+						return;
+					}
+
+					const surahSelect = document.getElementById('surahSelect');
+					if (!surahSelect || !surahSelect.value) return;
+					const next = Math.min(114, Number(surahSelect.value) + 1);
+					surahSelect.value = String(next);
+					handleSurahChange();
+					playQuranAudio();
 				}
 				
 				function playQuranAudio() {
+					const sourceSelect = document.getElementById('audioSourceSelect');
+					const usingLocal = sourceSelect && sourceSelect.value === 'local';
+					const localTrackSelect = document.getElementById('localTrackSelect');
+					const audio = document.getElementById('quranAudio');
 					const surahSelect = document.getElementById('surahSelect');
 					const reciterSelect = document.getElementById('reciterSelect');
-					const playBtn = document.getElementById('playBtn');
 					const stopBtn = document.getElementById('stopBtn');
 					const currentPlaying = document.getElementById('currentPlaying');
 					const playingText = document.getElementById('playingText');
-					const playBtnText = document.getElementById('playBtnText');
+					const audioStateChip = document.getElementById('audioStateChip');
+					const audioModeText = document.getElementById('audioModeText');
+
+					if (usingLocal) {
+						if (!localTrackSelect || localTrackSelect.value === '') {
+							showQuranMessage('Choose a local track first.');
+							return;
+						}
+
+						const index = Number(localTrackSelect.value);
+						const localFiles = window.localQuranAudioFiles || [];
+						const file = localFiles[index];
+						if (!file || !audio) {
+							showQuranMessage('Unable to play selected file.');
+							return;
+						}
+
+						if (window.localQuranAudioObjectUrl) {
+							URL.revokeObjectURL(window.localQuranAudioObjectUrl);
+						}
+						window.localQuranAudioObjectUrl = URL.createObjectURL(file);
+						audio.src = window.localQuranAudioObjectUrl;
+						audio.style.display = 'none';
+						playingText.textContent = file.webkitRelativePath || file.name;
+						if (audioModeText) {
+							audioModeText.textContent = 'Playing from your local files.';
+						}
+						currentPlaying.style.display = 'block';
+						setLoadingState(true);
+						audio.play().then(() => {
+							isPlaying = true;
+							setLoadingState(false);
+							updatePlayIcon(true);
+							updateAudioProgressUI();
+							if (audioStateChip) audioStateChip.textContent = 'Playing';
+							stopBtn.disabled = false;
+						}).catch(() => {
+							setLoadingState(false);
+							showQuranMessage('Unable to play this local file.');
+						});
+						return;
+					}
 					
 					if (!surahSelect.value) {
 						showQuranMessage('Please select a Surah first.');
@@ -3814,6 +4517,9 @@ class SidebarProvider {
 					}
 					
 					setLoadingState(true);
+					if (audioStateChip) {
+						audioStateChip.textContent = 'Buffering';
+					}
 					
 					// Show playing info
 					const surahText = surahSelect.options[surahSelect.selectedIndex].text;
@@ -3832,7 +4538,10 @@ class SidebarProvider {
 					// Update UI immediately
 					isPlaying = true;
 					setLoadingState(false);
-					playBtnText.textContent = 'Stop';
+					updatePlayIcon(true);
+					if (audioStateChip) {
+						audioStateChip.textContent = 'Playing';
+					}
 					stopBtn.disabled = false;
 					showQuranMessage('Starting Quran audio...');
 				}
@@ -3840,7 +4549,8 @@ class SidebarProvider {
 				function stopQuranAudio() {
 					const stopBtn = document.getElementById('stopBtn');
 					const currentPlaying = document.getElementById('currentPlaying');
-					const playBtnText = document.getElementById('playBtnText');
+					const audioStateChip = document.getElementById('audioStateChip');
+					const audio = document.getElementById('quranAudio');
 					
 					// Stop background audio
 					vscode.postMessage({
@@ -3849,9 +4559,18 @@ class SidebarProvider {
 					
 					// Update UI
 					isPlaying = false;
-					playBtnText.textContent = '▶️ Play';
+					localFolderAutoplayEnabled = false;
+					updatePlayIcon(false);
 					stopBtn.disabled = true;
 					currentPlaying.style.display = 'none';
+					if (audio) {
+						audio.pause();
+						audio.currentTime = 0;
+					}
+					updateAudioProgressUI();
+					if (audioStateChip) {
+						audioStateChip.textContent = 'Stopped';
+					}
 					vscode.postMessage({
 						command: 'quranAudioStopped'
 					});
@@ -3861,12 +4580,11 @@ class SidebarProvider {
 				
 				function playWebviewAudioFallback(audioUrl, surah, reciter) {
 					const audio = document.getElementById('quranAudio');
-					const playBtn = document.getElementById('playBtn');
 					const stopBtn = document.getElementById('stopBtn');
 					const currentPlaying = document.getElementById('currentPlaying');
 					const playingText = document.getElementById('playingText');
-					const playBtnText = document.getElementById('playBtnText');
 					const audioModeText = document.getElementById('audioModeText');
+					const audioStateChip = document.getElementById('audioStateChip');
 					
 					console.log('Starting webview audio fallback:', audioUrl);
 					
@@ -3877,25 +4595,42 @@ class SidebarProvider {
 					// Show playing info with fallback notice
 					playingText.textContent = \`Surah \${surah} by \${reciter}\`;
 					if (audioModeText) {
-						audioModeText.textContent = '🌐 Playing in browser mode (system audio unavailable)';
+						audioModeText.textContent = 'Playing in browser mode because system audio is unavailable.';
 					}
 					currentPlaying.style.display = 'block';
-					audio.style.display = 'block';
+					audio.style.display = 'none';
 					
 					// Play audio
 					audio.play().then(() => {
 						isPlaying = true;
-						playBtnText.textContent = '⏹️ Stop';
+						updatePlayIcon(true);
+						updateAudioProgressUI();
+						if (audioStateChip) {
+							audioStateChip.textContent = 'Playing';
+						}
 						stopBtn.disabled = false;
 						showQuranMessage('Playing Quran audio in browser mode...');
 						
 						// Set up event listeners for this fallback audio
 						audio.addEventListener('ended', function() {
+								const sourceSelect = document.getElementById('audioSourceSelect');
+								const isLocalSource = sourceSelect && sourceSelect.value === 'local';
+								if (!isLocalSource && repeatMode !== 'off') {
+									setTimeout(() => {
+										playWebviewAudioFallback(audioUrl, surah, reciter);
+									}, 250);
+									return;
+								}
+
 							isPlaying = false;
-							playBtnText.textContent = '▶️ Play';
+							updatePlayIcon(false);
 							stopBtn.disabled = true;
 							currentPlaying.style.display = 'none';
 							audio.style.display = 'none';
+							updateAudioProgressUI();
+							if (audioStateChip) {
+								audioStateChip.textContent = 'Finished';
+							}
 							
 							vscode.postMessage({
 								command: 'quranAudioStopped'
@@ -3918,6 +4653,32 @@ class SidebarProvider {
 				}
 				
 				function downloadQuranAudio() {
+					const sourceSelect = document.getElementById('audioSourceSelect');
+					const usingLocal = sourceSelect && sourceSelect.value === 'local';
+					if (usingLocal) {
+						const localTrackSelect = document.getElementById('localTrackSelect');
+						const localFiles = window.localQuranAudioFiles || [];
+						if (!localTrackSelect || localTrackSelect.value === '') {
+							showQuranMessage('Choose a local track first.');
+							return;
+						}
+						const file = localFiles[Number(localTrackSelect.value)];
+						if (!file) {
+							showQuranMessage('Unable to download selected file.');
+							return;
+						}
+						const url = URL.createObjectURL(file);
+						const link = document.createElement('a');
+						link.href = url;
+						link.download = file.name;
+						document.body.appendChild(link);
+						link.click();
+						document.body.removeChild(link);
+						setTimeout(() => URL.revokeObjectURL(url), 1000);
+						showQuranMessage('Download started for local file.');
+						return;
+					}
+
 					const surahSelect = document.getElementById('surahSelect');
 					const reciterSelect = document.getElementById('reciterSelect');
 					
@@ -3972,14 +4733,28 @@ class SidebarProvider {
 				function setLoadingState(loading) {
 					const playBtn = document.getElementById('playBtn');
 					const playBtnText = document.getElementById('playBtnText');
+					const audioStateChip = document.getElementById('audioStateChip');
+					const surahSelect = document.getElementById('surahSelect');
+					const localTrackSelect = document.getElementById('localTrackSelect');
+					const sourceSelect = document.getElementById('audioSourceSelect');
+					const usingLocal = sourceSelect && sourceSelect.value === 'local';
+					if (!playBtn || !playBtnText) return;
 					
 					if (loading) {
 						playBtn.classList.add('loading');
 						playBtnText.textContent = 'Loading...';
 						playBtn.disabled = true;
+						if (audioStateChip) audioStateChip.textContent = 'Buffering';
 					} else {
 						playBtn.classList.remove('loading');
-						playBtn.disabled = false;
+						playBtnText.textContent = isPlaying ? 'Pause' : 'Play';
+						const hasSelection = usingLocal
+							? (localTrackSelect && localTrackSelect.value)
+							: (surahSelect && surahSelect.value);
+						playBtn.disabled = !hasSelection && !isPlaying;
+						if (audioStateChip && !isPlaying && !hasSelection) {
+							audioStateChip.textContent = 'Ready';
+						}
 					}
 				}
 				
@@ -4122,7 +4897,7 @@ class SidebarProvider {
             `${prayerDateKey}:${prayer.key}:iqama-urgent`,
             async () => {
               this._showPrayerNotification(prayer.name, "urgent");
-              this._openGoPrayNowPanel(prayer.name);
+              this._activatePrayerLock(prayer.name);
             },
           );
         }, timeUntilUrgent);
@@ -4242,7 +5017,7 @@ class SidebarProvider {
     const selection = await vscode.window.showInformationMessage(
       `Did you pray ${previousPrayer.name}?`,
       "Yes, Alhamdulillah",
-      "Remind me in 10 min",
+      "Not yet, remind me in 10 min",
     );
 
     if (selection === "Yes, Alhamdulillah") {
@@ -4251,6 +5026,10 @@ class SidebarProvider {
         this._stateKeys.prayerResponses,
         responses,
       );
+      return;
+    }
+
+    if (selection !== "Not yet, remind me in 10 min") {
       return;
     }
 
@@ -4279,6 +5058,54 @@ class SidebarProvider {
     this._prayerTimeouts.set(repeatKey, repeatTimeout);
   }
 
+  _activatePrayerLock(prayerName) {
+    this._isPrayerLockActive = true;
+    this._prayerLockPrayerName = prayerName;
+    this._openGoPrayNowPanel(prayerName);
+
+    if (this._prayerLockRevealInterval) {
+      return;
+    }
+
+    this._prayerLockRevealInterval = setInterval(() => {
+      if (!this._isPrayerLockActive) {
+        return;
+      }
+
+      if (!this._goPrayPanel) {
+        this._openGoPrayNowPanel(this._prayerLockPrayerName || prayerName);
+        return;
+      }
+
+      this._goPrayPanel.reveal(vscode.ViewColumn.Active, false);
+    }, 3000);
+  }
+
+  _releasePrayerLock() {
+    this._isPrayerLockActive = false;
+    this._prayerLockPrayerName = "";
+
+    if (this._prayerLockRevealInterval) {
+      clearInterval(this._prayerLockRevealInterval);
+      this._prayerLockRevealInterval = null;
+    }
+
+    if (this._goPrayPanel) {
+      const panelToDispose = this._goPrayPanel;
+      this._goPrayPanel = null;
+      panelToDispose.dispose();
+    }
+  }
+
+  _escapeHtml(value) {
+    return String(value)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/\"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
   _openGoPrayNowPanel(prayerName) {
     if (!this._goPrayPanel) {
       this._goPrayPanel = vscode.window.createWebviewPanel(
@@ -4286,17 +5113,40 @@ class SidebarProvider {
         "Prayer Reminder",
         vscode.ViewColumn.Active,
         {
-          enableScripts: false,
+          enableScripts: true,
           retainContextWhenHidden: false,
         },
       );
 
+      this._goPrayPanel.webview.onDidReceiveMessage(
+        (message) => {
+          if (message.command === "prayerLockCompleted") {
+            this._releasePrayerLock();
+          }
+        },
+        undefined,
+        this._context.subscriptions,
+      );
+
       this._goPrayPanel.onDidDispose(() => {
         this._goPrayPanel = null;
+
+        // Re-open immediately if user still hasn't confirmed prayer.
+        if (this._isPrayerLockActive) {
+          setTimeout(() => {
+            if (this._isPrayerLockActive) {
+              this._openGoPrayNowPanel(
+                this._prayerLockPrayerName || prayerName,
+              );
+            }
+          }, 150);
+        }
       });
     } else {
       this._goPrayPanel.reveal(vscode.ViewColumn.Active, false);
     }
+
+    const safePrayerName = this._escapeHtml(prayerName);
 
     this._goPrayPanel.webview.html = `<!DOCTYPE html>
 <html lang="en">
@@ -4330,13 +5180,32 @@ class SidebarProvider {
 				font-weight: 600;
 				color: #ffd95b;
 			}
+
+			.done-button {
+				margin-top: 26px;
+				background: #ffd95b;
+				color: #111;
+				border: none;
+				border-radius: 12px;
+				padding: 12px 20px;
+				font-size: 16px;
+				font-weight: 700;
+				cursor: pointer;
+			}
 		</style>
 	</head>
 	<body>
 		<div class="message">
 			GO PRAY NOW
-			<div class="sub">${prayerName}</div>
+			<div class="sub">${safePrayerName}</div>
+			<button id="doneButton" class="done-button">I prayed - Alhamdulillah</button>
 		</div>
+		<script>
+			const vscode = acquireVsCodeApi();
+			document.getElementById('doneButton').addEventListener('click', () => {
+				vscode.postMessage({ command: 'prayerLockCompleted' });
+			});
+		</script>
 	</body>
 </html>`;
   }
@@ -4570,7 +5439,8 @@ class PrayerDataProvider {
     // Prayer times state
     this.prayerTimes = null;
     this.nextPrayer = null;
-    this.currentLocation = null;
+    this.currentLocation =
+      this._context.globalState.get("islamic-shoky.location") || null;
     this.refreshInterval = null;
 
     // Start auto-refresh every minute
@@ -4578,9 +5448,16 @@ class PrayerDataProvider {
 
     // Load location from main extension
     this.loadLocationFromMainExtension();
+
+    // Trigger an immediate first render so Explorer view is populated on startup.
+    this.refresh();
   }
 
   loadLocationFromMainExtension() {
+    if (this.currentLocation) {
+      return;
+    }
+
     // Get location data from the main extension's webview localStorage
     // Since we can't directly access localStorage from Node.js, we'll use VS Code settings
     // or try to get it from the main provider if available
@@ -5092,6 +5969,11 @@ function deactivate() {
     currentProvider._clearPrayerTimeouts();
   }
 
+  // Clear prayer lock panel/interval if active
+  if (currentProvider && currentProvider._releasePrayerLock) {
+    currentProvider._releasePrayerLock();
+  }
+
   // Stop timer when extension is deactivated
   if (timerProvider && timerProvider.interval) {
     clearInterval(timerProvider.interval);
@@ -5112,4 +5994,7 @@ function deactivate() {
 module.exports = {
   activate,
   deactivate,
+  __test: {
+    SidebarProvider,
+  },
 };
