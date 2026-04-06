@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description"
+        content="Islamic Shoky helps Muslim developers balance prayer, Quran, azkar, and deep work directly inside VS Code.">
+    <title>Islamic Shoky | Faith and Focus in VS Code</title>
+    <link rel="icon" type="image/png" href="media/logo.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&family=Space+Grotesk:wght@400;500;700&family=Noto+Naskh+Arabic:wght@400;600;700&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="./styles.css">
+</head>
+
+<body>
+    <a class="skip-link" href="#main-content">Skip to content</a>
+
+    <header class="site-header" id="top">
+        <div class="container nav-wrap">
+            <a class="brand" href="#top" aria-label="Islamic Shoky home">
+                <img src="media/logo.png" alt="Islamic Shoky logo" width="40" height="40">
+                <span>Islamic Shoky</span>
+            </a>
+
+            <button class="menu-toggle" id="menu-toggle" aria-expanded="false" aria-controls="site-nav">
+                <span></span>
+                <span></span>
+                <span></span>
+                <span class="sr-only">Toggle navigation</span>
+            </button>
+
+            <nav class="site-nav" id="site-nav" aria-label="Primary navigation">
+                <a href="#what-is-it">What It Is</a>
+                <a href="#features">Features</a>
+                <a href="#install">Install</a>
+                <a href="#developer">Developer</a>
+            </nav>
+
+            <a class="btn btn-primary"
+                href="https://marketplace.visualstudio.com/items?itemName=jooexploit.islamic-shoky" target="_blank"
+                rel="noopener noreferrer">Install Extension</a>
+        </div>
+    </header>
+
+    <main id="main-content">
+        <section class="hero">
+            <div class="container hero-grid">
+                <div class="hero-copy">
+                    <p class="eyebrow">For Muslim Developers</p>
+                    <h1>Keep Your Faith Active While You Build Software</h1>
+                    <p class="lead">Islamic Shoky is a VS Code extension that brings prayer times, Quran listening,
+                        daily azkar,
+                        focused work sessions, and task tracking into one spiritual productivity workspace.</p>
+                    <div class="hero-actions">
+                        <a class="btn btn-primary"
+                            href="https://marketplace.visualstudio.com/items?itemName=islamic-shoky.islamic-shoky"
+                            target="_blank" rel="noopener noreferrer">Install from Marketplace</a>
+                        <a class="btn btn-secondary" href="#install">See Installation Steps</a>
+                    </div>
+                    <ul class="hero-meta" aria-label="Project trust indicators">
+                        <li><strong>Version:</strong> 1.3.2</li>
+                        <li><strong>License:</strong> MIT</li>
+                        <li><strong>Open Source:</strong> GitHub</li>
+                    </ul>
+                </div>
+
+                <div class="hero-visual card-glow">
+                    <img src="img/image.png"
+                        alt="Islamic Shoky Quran player screenshot inside VS Code with playback controls"
+                        loading="eager">
+                </div>
+            </div>
+        </section>
+
+        <section class="section" id="what-is-it">
+            <div class="container">
+                <div class="section-head">
+                    <p class="eyebrow">What Is Islamic Shoky?</p>
+                    <h2>One Sidebar, Five Daily Essentials</h2>
+                    <p>Islamic Shoky combines spiritual routines and productivity tools so you can code with barakah,
+                        structure, and less context switching.</p>
+                </div>
+
+                <div class="pillars">
+                    <article class="pillar-card">
+                        <h3>Spiritual Presence</h3>
+                        <p>Prayer time awareness, azkar reminders, and Quran recitation support are always one click
+                            away.</p>
+                    </article>
+                    <article class="pillar-card">
+                        <h3>Deep Work Rhythm</h3>
+                        <p>Built-in Pomodoro focus sessions and break cycles help protect your concentration and energy.
+                        </p>
+                    </article>
+                    <article class="pillar-card">
+                        <h3>Reliable Daily Flow</h3>
+                        <p>Todo tracking, explorer integration, and notification controls make routines easier to
+                            maintain.</p>
+                    </article>
+                </div>
+            </div>
+        </section>
+
+        <section class="section section-alt" id="features">
+            <div class="container">
+                <div class="section-head">
+                    <p class="eyebrow">Feature Showcase</p>
+                    <h2>Built for Real Developer Workdays</h2>
+                </div>
+
+                <div class="feature-grid">
+                    <article class="feature-card">
+                        <img src="img/next_prayer.png" alt="Next prayer time card shown in VS Code" loading="lazy">
+                        <div>
+                            <h3>Prayer Times</h3>
+                            <p>Location-aware prayer schedule with configurable calculation methods and smart reminders.
+                            </p>
+                        </div>
+                    </article>
+
+                    <article class="feature-card">
+                        <img src="img/daily_azkar.png" alt="Daily azkar card with Arabic text" loading="lazy">
+                        <div>
+                            <h3>Daily Azkar</h3>
+                            <p>Auto-rotating Islamic remembrances with custom azkar support and optional sound cues.</p>
+                        </div>
+                    </article>
+
+                    <article class="feature-card">
+                        <img src="img/pomodoro.png" alt="Pomodoro timer interface in the extension" loading="lazy">
+                        <div>
+                            <h3>Pomodoro Focus</h3>
+                            <p>Configurable focus and break sessions with clear status and completion notifications.</p>
+                        </div>
+                    </article>
+
+                    <article class="feature-card">
+                        <img src="img/to_do_list.png" alt="Todo list panel inside Islamic Shoky" loading="lazy">
+                        <div>
+                            <h3>Task Management</h3>
+                            <p>Keep coding tasks visible and manageable without leaving your editor.</p>
+                        </div>
+                    </article>
+                </div>
+
+
+            </div>
+        </section>
+
+        <section class="section" id="install">
+            <div class="container install-layout">
+                <div>
+                    <div class="section-head">
+                        <p class="eyebrow">Installation</p>
+                        <h2>Install Islamic Shoky in Under a Minute</h2>
+                    </div>
+
+                    <ol class="install-steps">
+                        <li>Open VS Code and go to Extensions with <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>X</kbd>.
+                        </li>
+                        <li>Search for <strong>Islamic Shoky</strong>.</li>
+                        <li>Click <strong>Install</strong>.</li>
+                        <li>Reload VS Code when prompted.</li>
+                        <li>Open the Islamic Shoky icon from the Activity Bar.</li>
+                    </ol>
+                </div>
+
+                <aside class="install-card card-glow">
+                    <h3>Install Now</h3>
+                    <p>Use the official Marketplace listing to get the latest stable version.</p>
+                    <a class="btn btn-primary"
+                        href="https://marketplace.visualstudio.com/items?itemName=jooexploit.islamic-shoky"
+                        target="_blank" rel="noopener noreferrer">Open Marketplace</a>
+                    <p class="fine-print">Publisher: jooexploit</p>
+                </aside>
+            </div>
+        </section>
+
+        <section class="section section-alt" id="developer">
+            <div class="container developer-layout">
+                <div>
+                    <div class="section-head">
+                        <p class="eyebrow">Developer Info</p>
+                        <h2>Built and Maintained by jooexploit</h2>
+                    </div>
+                    <p>This extension is open source and actively maintained. Contributions, issues, and feedback are
+                        welcome from the community.</p>
+
+                    <ul class="dev-links">
+                        <li><a href="https://github.com/jooexploit/islamic-shoky-extension" target="_blank"
+                                rel="noopener noreferrer">Repository</a></li>
+                        <li><a href="https://github.com/jooexploit/islamic-shoky-extension/issues" target="_blank"
+                                rel="noopener noreferrer">Report an Issue</a></li>
+                        <li><a href="https://github.com/jooexploit/islamic-shoky-extension/discussions" target="_blank"
+                                rel="noopener noreferrer">Community Discussions</a></li>
+                        <li><a href="mailto:youseftamereg@gmail.com">Contact Email</a></li>
+                    </ul>
+                </div>
+
+                <div class="quote-card" lang="ar" dir="rtl">
+                    <p class="arabic">وَقُل رَّبِّ زِدْنِي عِلْمًا</p>
+                    <p class="translation">"My Lord, increase me in knowledge."</p>
+                </div>
+            </div>
+        </section>
+
+        <section class="section cta-band">
+            <div class="container cta-wrap">
+                <h2>Bring Faith and Focus Into Your Coding Workflow</h2>
+                <a class="btn btn-primary"
+                    href="https://marketplace.visualstudio.com/items?itemName=jooexploit.islamic-shoky" target="_blank"
+                    rel="noopener noreferrer">Install Islamic Shoky</a>
+            </div>
+        </section>
+    </main>
+
+    <footer class="site-footer">
+        <div class="container footer-grid">
+            <p>Islamic Shoky - Bridging faith and productivity in your coding journey.</p>
+            <a href="#top">Back to top</a>
+        </div>
+    </footer>
+
+    <script src="./main.js" defer></script>
+</body>
+
+</html>
