@@ -16,6 +16,7 @@ class SidebarProvider {
     this._currentAudioState = null; // Track Quran audio state
     this._audioProcess = null; // Track background audio process
     this._audioStatusCheck = null; // Audio status check interval
+    this._isStoppingAudio = false;
     this._reminderInterval = null; // 5-minute reminder interval
     this._reminderAudioProcess = null; // Background reminder audio process
     this._goPrayPanel = null; // Urgent prayer reminder panel
@@ -267,10 +268,16 @@ class SidebarProvider {
     const config = this._getConfiguration();
     // Play sound for Prophet Muhammad's azkar using Node.js
     console.log("_playAzkarSound called with:", azkarText);
-    if (
-      azkarText.includes("اللهم صل وسلم على نبينا محمد") &&
-      config.enableAzkarSound
-    ) {
+
+    const normalizedAzkar = this._normalizeArabicForMatching(azkarText || "");
+    const shouldPlaySpecialAzkar =
+      normalizedAzkar.includes("اللهم صل وسلم على نبينا محمد") ||
+      normalizedAzkar.includes("صلي علي محمد") ||
+      normalizedAzkar.includes("صلي على محمد") ||
+      normalizedAzkar.includes("صل علي محمد") ||
+      normalizedAzkar.includes("صل على محمد");
+
+    if (shouldPlaySpecialAzkar && config.enableAzkarSound) {
       console.log("Playing sound for Prophet Muhammad azkar using Node.js");
 
       // Stop any existing sound
@@ -306,11 +313,8 @@ class SidebarProvider {
       const platform = process.platform;
 
       if (platform === "win32") {
-        // Windows
-        this._soundProcess = spawn("powershell", [
-          "-c",
-          `(New-Object Media.SoundPlayer "${soundFilePath}").PlaySync();`,
-        ]);
+        // Windows: use WMPlayer COM via PowerShell (supports mp3 unlike SoundPlayer)
+        this._soundProcess = this._spawnWindowsAudioProcess(soundFilePath);
       } else if (platform === "darwin") {
         // macOS
         this._soundProcess = spawn("afplay", [soundFilePath]);
@@ -430,18 +434,8 @@ class SidebarProvider {
       console.log("Starting background Quran audio:", audioUrl);
 
       if (platform === "win32") {
-        // Windows - use PowerShell with MediaPlayer
-        this._audioProcess = spawn("powershell", [
-          "-c",
-          `Add-Type -AssemblyName presentationCore; 
-           $mediaPlayer = New-Object system.windows.media.mediaplayer; 
-           $mediaPlayer.open('${audioUrl}'); 
-           $mediaPlayer.Play(); 
-           Start-Sleep 1; 
-           while($mediaPlayer.NaturalDuration.HasTimeSpan -eq $false) { Start-Sleep 1 }; 
-           $duration = $mediaPlayer.NaturalDuration.TimeSpan.TotalSeconds; 
-           Start-Sleep $duration`,
-        ]);
+        // Windows: use WMPlayer COM via PowerShell for robust mp3/url playback.
+        this._audioProcess = this._spawnWindowsAudioProcess(audioUrl);
       } else if (platform === "darwin") {
         // macOS - use curl to download and afplay to play
         this._audioProcess = spawn("sh", [
@@ -551,6 +545,8 @@ class SidebarProvider {
     // Handle process completion
     this._audioProcess.on("close", (code) => {
       console.log("Background audio process finished with code:", code);
+      const wasManualStop = this._isStoppingAudio;
+      this._isStoppingAudio = false;
       this._audioProcess = null;
       this._currentAudioState = null;
 
@@ -563,11 +559,18 @@ class SidebarProvider {
 
       if (code === 0) {
         vscode.window.showInformationMessage("Quran playbook completed");
+        return;
+      }
+
+      // If playback ended unexpectedly (especially on Windows), fall back to webview audio.
+      if (!wasManualStop) {
+        this._fallbackToWebviewAudio(audioUrl, surah, reciter);
       }
     });
 
     this._audioProcess.on("error", (error) => {
       console.log("Background audio process error:", error);
+      this._isStoppingAudio = false;
       this._audioProcess = null;
       this._currentAudioState = null;
 
@@ -610,6 +613,7 @@ class SidebarProvider {
   _stopBackgroundAudio() {
     if (this._audioProcess) {
       console.log("Stopping background audio process");
+      this._isStoppingAudio = true;
       this._audioProcess.kill();
       this._audioProcess = null;
       this._currentAudioState = null;
@@ -629,6 +633,7 @@ class SidebarProvider {
 
       vscode.window.showInformationMessage("Quran playback stopped");
     }
+    this._isStoppingAudio = false;
   }
 
   _startAudioStatusCheck() {
@@ -683,11 +688,9 @@ class SidebarProvider {
       const platform = process.platform;
 
       if (platform === "win32") {
-        // Windows
-        this._reminderAudioProcess = spawn("powershell", [
-          "-c",
-          `(New-Object Media.SoundPlayer "${soundFilePath}").PlaySync();`,
-        ]);
+        // Windows: use WMPlayer COM via PowerShell (supports mp3 unlike SoundPlayer)
+        this._reminderAudioProcess =
+          this._spawnWindowsAudioProcess(soundFilePath);
       } else if (platform === "darwin") {
         // macOS
         this._reminderAudioProcess = spawn("afplay", [soundFilePath]);
@@ -789,6 +792,46 @@ class SidebarProvider {
       }
     }
     return null;
+  }
+
+  _normalizeArabicForMatching(text) {
+    return String(text)
+      .normalize("NFKC")
+      .replace(/[\u064B-\u065F\u0670\u06D6-\u06ED]/g, "")
+      .replace(/[أإآٱ]/g, "ا")
+      .replace(/ى/g, "ي")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  _getWindowsPowerShellCommand() {
+    const shells = ["powershell.exe", "powershell", "pwsh.exe", "pwsh"];
+    for (const shell of shells) {
+      const result = spawnSync("where", [shell], { stdio: "ignore" });
+      if (result.status === 0) {
+        return shell;
+      }
+    }
+    return null;
+  }
+
+  _escapeForPowerShellSingleQuote(value) {
+    return String(value).replace(/'/g, "''");
+  }
+
+  _spawnWindowsAudioProcess(source) {
+    const shell = this._getWindowsPowerShellCommand();
+    if (!shell) {
+      console.log(
+        "No PowerShell executable found on Windows for audio playback",
+      );
+      return null;
+    }
+
+    const safeSource = this._escapeForPowerShellSingleQuote(source);
+    const script = `$ErrorActionPreference='Stop';\n$player = New-Object -ComObject WMPlayer.OCX;\n$media = $player.newMedia('${safeSource}');\n$null = $player.currentPlaylist.appendItem($media);\n$player.controls.play();\nwhile ($player.playState -ne 1) { Start-Sleep -Milliseconds 250 }`;
+
+    return spawn(shell, ["-NoProfile", "-NonInteractive", "-Command", script]);
   }
 
   _handleAzkarChanged(azkar) {
